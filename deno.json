@@ -1,6 +1,6 @@
 {
   "name": "@cfs/utilities",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "license": "MIT",
   "exports": {
     "./dates": "./src/dates.ts",
@@ -21,6 +21,10 @@
     "strict": true
   },
   "publish": {
-    "include": ["src/", "deno.json", "LICENSE"]
+    "include": [
+      "src/",
+      "deno.json",
+      "LICENSE"
+    ]
   }
 }
