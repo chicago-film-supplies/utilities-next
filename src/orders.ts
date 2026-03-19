@@ -165,12 +165,17 @@ export function getTotalDiscount(items: LineItem[]): number {
   return total.value;
 }
 
+export interface TaxEntry {
+  name: string;
+  total: number;
+}
+
 /**
  * Calculate tax totals grouped by tax profile across all priceable items.
  */
 export function getTaxesByTaxProfile(
   items: LineItem[],
-): Record<string, number> {
+): TaxEntry[] {
   if (!Array.isArray(items)) {
     throw new Error("items must be an array");
   }
@@ -191,18 +196,13 @@ export function getTaxesByTaxProfile(
     totals[profile] = totals[profile].add(tax);
   }
 
-  const result: Record<string, number> = {};
-  for (const [profile, amount] of Object.entries(totals)) {
-    result[profile] = amount.value;
-  }
-
-  return result;
+  return Object.entries(totals).map(([name, amount]) => ({ name, total: amount.value }));
 }
 
 export interface OrderTotals {
   discount_amount: number;
   subtotal: number;
-  taxes: Record<string, number>;
+  taxes: TaxEntry[];
   total: number;
 }
 
@@ -224,8 +224,8 @@ export function calculateOrderTotals(items: LineItem[]): OrderTotals {
   const taxes = getTaxesByTaxProfile(items);
 
   let taxSum = currency(0);
-  for (const amount of Object.values(taxes)) {
-    taxSum = taxSum.add(amount);
+  for (const entry of taxes) {
+    taxSum = taxSum.add(entry.total);
   }
 
   return {

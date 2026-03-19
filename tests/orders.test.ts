@@ -188,9 +188,12 @@ Deno.test("getTaxesByTaxProfile groups by profile", () => {
     makeItem(),
   ];
   const result = getTaxesByTaxProfile(items);
-  assertEquals(result["tax_chicago_sales_tax"], 20.50);
-  assertEquals(result["tax_chicago_rental_tax"], 15);
-  assertEquals(result["tax_none"], undefined);
+  const salesTax = result.find((t) => t.name === "tax_chicago_sales_tax");
+  const rentalTax = result.find((t) => t.name === "tax_chicago_rental_tax");
+  const noneTax = result.find((t) => t.name === "tax_none");
+  assertEquals(salesTax?.total, 20.50);
+  assertEquals(rentalTax?.total, 15);
+  assertEquals(noneTax, undefined);
 });
 
 // ── calculateOrderTotals ─────────────────────────────────────────
@@ -203,7 +206,7 @@ Deno.test("calculateOrderTotals computes all totals", () => {
   const result = calculateOrderTotals(items);
   assertEquals(result.subtotal, 140); // 90 + 50
   assertEquals(result.discount_amount, 10);
-  assertEquals(result.taxes["tax_chicago_sales_tax"], 9.23); // 90 * 0.1025
+  assertEquals(result.taxes.find((t) => t.name === "tax_chicago_sales_tax")?.total, 9.23); // 90 * 0.1025
   assertEquals(result.total, 149.23); // 140 + 9.23
 });
 
