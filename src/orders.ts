@@ -464,6 +464,47 @@ export function getGroupItems(items: LineItem[], index: number): LineItem[] {
   );
 }
 
+/**
+ * Collect the indices of all items that should be removed when the item
+ * at `index` is deleted — the item itself plus all its descendants.
+ * Returns indices sorted ascending.
+ */
+export function getRemovalIndices(items: LineItem[], index: number): number[] {
+  if (!Array.isArray(items) || index < 0 || index >= items.length) return [];
+
+  const item = items[index];
+
+  // Destination: self + everything until the next destination
+  if (item.type === "destination") {
+    const indices = [index];
+    for (let i = index + 1; i < items.length; i++) {
+      if (items[i].type === "destination") break;
+      indices.push(i);
+    }
+    return indices;
+  }
+
+  // Group: self + everything until the next group or destination
+  if (item.type === "group") {
+    const indices = [index];
+    for (let i = index + 1; i < items.length; i++) {
+      if (items[i].type === "group" || items[i].type === "destination") break;
+      indices.push(i);
+    }
+    return indices;
+  }
+
+  // Product: self + ALL components (regardless of zero_priced)
+  const uid = item.uid;
+  const indices = [index];
+  for (let i = 0; i < items.length; i++) {
+    if (i !== index && items[i].uid_component_of === uid) {
+      indices.push(i);
+    }
+  }
+  return indices.sort((a, b) => a - b);
+}
+
 export interface GroupTotalsResult {
   count: number;
   subtotal: number;
