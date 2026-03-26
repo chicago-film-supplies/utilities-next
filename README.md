@@ -1,8 +1,6 @@
-# CLAUDE.md
+# utilities-next
 
-## API Reference
-
-A full OpenAPI spec for the CFS API is available at `~/cfs/api-cloudrun/openapi.json`. It is auto-generated on each commit in that repo and documents all endpoints, request/response schemas, and propagation rules.
+Shared utilities for the CFS platform, published to JSR.
 
 ## Commit Guidelines (Semantic Release)
 
