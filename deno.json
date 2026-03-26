@@ -1,6 +1,6 @@
 {
   "name": "@cfs/utilities",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0",
   "license": "MIT",
   "exports": {
     "./dates": "./src/dates.ts",
