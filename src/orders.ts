@@ -8,30 +8,39 @@
 
 import currency from "currency.js";
 
-/**
- * Tax rates by profile name. Values are decimal multipliers.
- */
-const TAX_RATES: Record<string, number> = {
-  tax_chicago_sales_tax: 0.1025,
-  tax_chicago_rental_tax: 0.15,
-  tax_rantoul_sales_tax: 0.09,
-  tax_none: 0,
-};
+// ── Types ────────────────────────────────────────────────────────
 
-function getTaxRate(taxProfile: string): number {
-  if (!(taxProfile in TAX_RATES)) {
-    throw new Error("Unknown tax profile: " + taxProfile);
-  }
-  return TAX_RATES[taxProfile];
+export interface Discount {
+  rate: number;
+  type: "percent" | "flat";
+  amount: number;
+}
+
+export interface PriceModifier {
+  /** Tax doc uid (for taxes) or product uid (for fees). */
+  uid: string;
+  name: string;
+  rate: number;
+  type: "percent" | "flat";
+  amount: number;
 }
 
 export interface PriceObject {
   base?: number;
   formula: string;
-  chargeable_days?: number;
-  discount_percent?: number;
-  tax_profile: string;
+  chargeable_days: number | null;
+  discount: Discount | null;
+  taxes: PriceModifier[];
+  subtotal: number;
+  subtotal_discounted: number;
   total?: number;
+}
+
+export interface Tax {
+  uid: string;
+  name: string;
+  rate: number;
+  type: "percent" | "flat";
 }
 
 export interface LineItem {
@@ -39,7 +48,7 @@ export interface LineItem {
   name?: string;
   type?: string;
   quantity?: number;
-  price?: PriceObject;
+  price?: PriceObject | PriceModifier;
   stock_method?: string;
   uid_component_of?: string;
   uid_delivery?: string;
@@ -47,8 +56,19 @@ export interface LineItem {
   zero_priced?: boolean;
 }
 
+export interface OrderTotals {
+  discount_amount: number;
+  subtotal: number;
+  subtotal_discounted: number;
+  taxes: PriceModifier[];
+  transaction_fees: PriceModifier[];
+  total: number;
+}
+
+// ── Type guards ──────────────────────────────────────────────────
+
 /**
- * Determine whether a line item is priceable (has a calculable total).
+ * Determine whether a line item is priceable (has a price object, not a structural item).
  */
 export function isPriceableItem(item: LineItem): boolean {
   if (!item || typeof item !== "object") return false;
@@ -58,98 +78,183 @@ export function isPriceableItem(item: LineItem): boolean {
 }
 
 /**
- * Calculate the pre-tax subtotal for a single line item.
+ * Determine whether a line item is a transaction fee.
  */
-export function calculateItemSubtotal(item: LineItem): number {
-  if (!isPriceableItem(item)) {
+export function isTransactionFeeItem(item: LineItem): boolean {
+  return item?.type === "transaction_fee";
+}
+
+/**
+ * Determine whether a line item participates in subtotal/discount/tax calculations.
+ * Returns true for priceable items that are not transaction fees.
+ */
+export function isPreTaxItem(item: LineItem): boolean {
+  return isPriceableItem(item) && !isTransactionFeeItem(item);
+}
+
+// ── Days factor ──────────────────────────────────────────────────
+
+function getDaysFactor(formula: string, chargeable_days: number | null): number {
+  if (formula === "five_day_week") {
+    return (chargeable_days ?? 0) / 5;
+  }
+  if (formula === "fixed") {
+    return 1;
+  }
+  throw new Error("Unknown formula: " + formula);
+}
+
+// ── Item-level calculations ──────────────────────────────────────
+
+/**
+ * Calculate the pre-discount and post-discount subtotals for a single line item.
+ */
+export function calculateItemSubtotal(
+  item: LineItem,
+): { subtotal: number; subtotal_discounted: number } {
+  if (!isPreTaxItem(item)) {
     throw new Error(
-      "Item is not priceable: missing price object or is a destination/group",
+      "Item is not priceable: missing price object or is a destination/group/transaction_fee",
     );
   }
 
+  const price = item.price as PriceObject;
   const quantity = item.quantity || 0;
-  const {
-    base = 0,
-    formula,
-    chargeable_days = 0,
-    discount_percent = 0,
-  } = item.price!;
+  const { base = 0, formula, chargeable_days = null, discount } = price;
 
-  if (formula !== "five_day_week" && formula !== "fixed") {
-    throw new Error("Unknown formula: " + formula);
-  }
+  const daysFactor = getDaysFactor(formula, chargeable_days);
 
-  const discountMultiplier = (100 - discount_percent) / 100;
-
-  if (formula === "five_day_week") {
-    return currency(base)
-      .multiply(quantity)
-      .multiply(chargeable_days / 5)
-      .multiply(discountMultiplier).value;
-  }
-
-  return currency(base)
+  const subtotal = currency(base)
     .multiply(quantity)
-    .multiply(discountMultiplier).value;
-}
+    .multiply(daysFactor);
 
-/**
- * Calculate the tax amount for a single line item.
- */
-export function calculateItemTax(item: LineItem): number {
-  const subtotal = calculateItemSubtotal(item);
-  const taxRate = getTaxRate(item.price!.tax_profile);
-  return currency(subtotal).multiply(taxRate).value;
-}
+  if (!discount) {
+    return { subtotal: subtotal.value, subtotal_discounted: subtotal.value };
+  }
 
-/**
- * Calculate the total (subtotal + tax) for a single line item.
- */
-export function calculateItemTotal(item: LineItem): number {
-  const subtotal = calculateItemSubtotal(item);
-  const tax = calculateItemTax(item);
-  return currency(subtotal).add(tax).value;
+  let subtotal_discounted: currency;
+  if (discount.type === "percent") {
+    subtotal_discounted = subtotal.multiply((100 - discount.rate) / 100);
+  } else {
+    const discountAmount = currency(discount.rate)
+      .multiply(quantity)
+      .multiply(daysFactor);
+    subtotal_discounted = subtotal.subtract(discountAmount);
+  }
+
+  return { subtotal: subtotal.value, subtotal_discounted: subtotal_discounted.value };
 }
 
 /**
  * Calculate the discount dollar amount for a single line item.
  */
 export function calculateItemDiscount(item: LineItem): number {
+  const { subtotal, subtotal_discounted } = calculateItemSubtotal(item);
+  return currency(subtotal).subtract(subtotal_discounted).value;
+}
+
+/**
+ * Calculate tax amounts for a single line item from the Tax[] parameter.
+ * Returns a PriceModifier[] with computed amounts.
+ */
+export function calculateItemTax(
+  item: LineItem,
+  taxes: Tax[],
+): PriceModifier[] {
+  if (!isPreTaxItem(item)) {
+    throw new Error(
+      "Item is not priceable: missing price object or is a destination/group/transaction_fee",
+    );
+  }
+
+  const price = item.price as PriceObject;
+  const { subtotal_discounted } = calculateItemSubtotal(item);
+  const quantity = item.quantity || 0;
+
+  return price.taxes.map((itemTax) => {
+    const taxDoc = taxes.find((t) => t.uid === itemTax.uid);
+    if (!taxDoc) {
+      throw new Error("Unknown tax uid: " + itemTax.uid);
+    }
+
+    let amount: number;
+    if (taxDoc.type === "percent") {
+      amount = currency(subtotal_discounted).multiply(taxDoc.rate / 100).value;
+    } else {
+      amount = currency(taxDoc.rate).multiply(quantity).value;
+    }
+
+    return {
+      uid: taxDoc.uid,
+      name: taxDoc.name,
+      rate: taxDoc.rate,
+      type: taxDoc.type,
+      amount,
+    };
+  });
+}
+
+/**
+ * Calculate the complete price for a single line item.
+ * Runs the full pipeline: subtotal → discount → taxes → total.
+ */
+export function calculateItemPrice(
+  item: LineItem,
+  taxes: Tax[],
+): { subtotal: number; subtotal_discounted: number; discount: Discount | null; taxes: PriceModifier[]; total: number } {
+  const { subtotal, subtotal_discounted } = calculateItemSubtotal(item);
+  const price = item.price as PriceObject;
+  const itemTaxes = calculateItemTax(item, taxes);
+
+  let taxSum = currency(0);
+  for (const t of itemTaxes) {
+    taxSum = taxSum.add(t.amount);
+  }
+
+  let discount: Discount | null = null;
+  if (price.discount) {
+    discount = {
+      rate: price.discount.rate,
+      type: price.discount.type,
+      amount: currency(subtotal).subtract(subtotal_discounted).value,
+    };
+  }
+
+  return {
+    subtotal,
+    subtotal_discounted,
+    discount,
+    taxes: itemTaxes,
+    total: currency(subtotal_discounted).add(taxSum).value,
+  };
+}
+
+/**
+ * Calculate the total (subtotal_discounted + taxes) for a single line item.
+ * Handles both PriceObject (regular items) and PriceModifier (transaction fee items).
+ */
+export function calculateItemTotal(
+  item: LineItem,
+  taxes: Tax[],
+): number {
   if (!isPriceableItem(item)) {
     throw new Error(
       "Item is not priceable: missing price object or is a destination/group",
     );
   }
 
-  const quantity = item.quantity || 0;
-  const {
-    base = 0,
-    formula,
-    chargeable_days = 0,
-    discount_percent = 0,
-  } = item.price!;
-
-  if (discount_percent === 0) return 0;
-
-  if (formula !== "five_day_week" && formula !== "fixed") {
-    throw new Error("Unknown formula: " + formula);
+  if (isTransactionFeeItem(item)) {
+    return (item.price as PriceModifier).amount;
   }
 
-  let undiscounted: currency;
-  if (formula === "five_day_week") {
-    undiscounted = currency(base).multiply(quantity).multiply(
-      chargeable_days / 5,
-    );
-  } else {
-    undiscounted = currency(base).multiply(quantity);
-  }
-
-  const discounted = undiscounted.multiply((100 - discount_percent) / 100);
-  return undiscounted.subtract(discounted).value;
+  const { total } = calculateItemPrice(item, taxes);
+  return total;
 }
 
+// ── Aggregation functions ────────────────────────────────────────
+
 /**
- * Calculate the total discount amount across all priceable items.
+ * Calculate the total discount amount across all pre-tax items.
  */
 export function getTotalDiscount(items: LineItem[]): number {
   if (!Array.isArray(items)) {
@@ -158,81 +263,132 @@ export function getTotalDiscount(items: LineItem[]): number {
 
   let total = currency(0);
   for (const item of items) {
-    if (!isPriceableItem(item)) continue;
+    if (!isPreTaxItem(item)) continue;
     total = total.add(calculateItemDiscount(item));
   }
 
   return total.value;
 }
 
-export interface TaxEntry {
-  name: string;
-  total: number;
-}
-
 /**
- * Calculate tax totals grouped by tax profile across all priceable items.
+ * Aggregate tax PriceModifiers by name across all pre-tax items.
  */
-export function getTaxesByTaxProfile(
+export function getTaxTotals(
   items: LineItem[],
-): TaxEntry[] {
+  taxes: Tax[],
+): PriceModifier[] {
   if (!Array.isArray(items)) {
     throw new Error("items must be an array");
   }
 
-  const totals: Record<string, currency> = {};
+  const totals: Record<string, { uid: string; rate: number; type: "percent" | "flat"; amount: currency }> = {};
 
   for (const item of items) {
-    if (!isPriceableItem(item)) continue;
+    if (!isPreTaxItem(item)) continue;
 
-    const profile = item.price!.tax_profile;
-    const tax = calculateItemTax(item);
+    const itemTaxes = calculateItemTax(item, taxes);
+    for (const tax of itemTaxes) {
+      if (tax.amount === 0) continue;
 
-    if (tax === 0) continue;
-
-    if (!totals[profile]) {
-      totals[profile] = currency(0);
+      if (!totals[tax.name]) {
+        totals[tax.name] = { uid: tax.uid, rate: tax.rate, type: tax.type, amount: currency(0) };
+      }
+      totals[tax.name].amount = totals[tax.name].amount.add(tax.amount);
     }
-    totals[profile] = totals[profile].add(tax);
   }
 
-  return Object.entries(totals).map(([name, amount]) => ({ name, total: amount.value }));
+  return Object.entries(totals).map(([name, { uid, rate, type, amount }]) => ({
+    uid, name, rate, type, amount: amount.value,
+  }));
 }
 
-export interface OrderTotals {
-  discount_amount: number;
-  subtotal: number;
-  taxes: TaxEntry[];
-  total: number;
+/**
+ * Aggregate transaction fee PriceModifiers across all fee items.
+ */
+export function getTransactionFeeTotals(items: LineItem[]): PriceModifier[] {
+  const totals: Record<string, { uid: string; rate: number; type: "percent" | "flat"; amount: currency }> = {};
+
+  for (const item of items) {
+    if (!isTransactionFeeItem(item) || !isPriceableItem(item)) continue;
+
+    const fee = item.price as PriceModifier;
+    if (fee.amount === 0) continue;
+
+    if (!totals[fee.name]) {
+      totals[fee.name] = { uid: fee.uid, rate: fee.rate, type: fee.type, amount: currency(0) };
+    }
+    totals[fee.name].amount = totals[fee.name].amount.add(fee.amount);
+  }
+
+  return Object.entries(totals).map(([name, { uid, rate, type, amount }]) => ({
+    uid, name, rate, type, amount: amount.value,
+  }));
 }
 
 /**
  * Calculate aggregated pricing totals for an entire order.
+ * Owns the two-pass computation: pre-tax items first, then transaction fees.
  */
-export function calculateOrderTotals(items: LineItem[]): OrderTotals {
+export function calculateOrderTotals(
+  items: LineItem[],
+  taxes: Tax[],
+): OrderTotals {
   if (!Array.isArray(items)) {
     throw new Error("items must be an array");
   }
 
+  // Pass 1: compute subtotals from pre-tax items
   let subtotal = currency(0);
+  let subtotal_discounted = currency(0);
+
   for (const item of items) {
-    if (!isPriceableItem(item)) continue;
-    subtotal = subtotal.add(calculateItemSubtotal(item));
+    if (!isPreTaxItem(item)) continue;
+    const result = calculateItemSubtotal(item);
+    subtotal = subtotal.add(result.subtotal);
+    subtotal_discounted = subtotal_discounted.add(result.subtotal_discounted);
   }
 
   const discount_amount = getTotalDiscount(items);
-  const taxes = getTaxesByTaxProfile(items);
+  const taxTotals = getTaxTotals(items, taxes);
 
   let taxSum = currency(0);
-  for (const entry of taxes) {
-    taxSum = taxSum.add(entry.total);
+  for (const entry of taxTotals) {
+    taxSum = taxSum.add(entry.amount);
+  }
+
+  // Pass 2: compute transaction fee amounts
+  const feeItems: LineItem[] = [];
+  for (const item of items) {
+    if (!isTransactionFeeItem(item) || !isPriceableItem(item)) continue;
+
+    const fee = item.price as PriceModifier;
+    let amount: number;
+    if (fee.type === "percent") {
+      amount = currency(subtotal_discounted).multiply(fee.rate / 100).value;
+    } else {
+      amount = currency(fee.rate).multiply(item.quantity || 0).value;
+    }
+
+    feeItems.push({
+      ...item,
+      price: { ...fee, amount },
+    });
+  }
+
+  const transaction_fees = getTransactionFeeTotals(feeItems);
+
+  let feeSum = currency(0);
+  for (const entry of transaction_fees) {
+    feeSum = feeSum.add(entry.amount);
   }
 
   return {
     discount_amount,
     subtotal: subtotal.value,
-    taxes,
-    total: currency(subtotal).add(taxSum).value,
+    subtotal_discounted: subtotal_discounted.value,
+    taxes: taxTotals,
+    transaction_fees,
+    total: currency(subtotal_discounted).add(taxSum).add(feeSum).value,
   };
 }
 
@@ -246,20 +402,20 @@ export function orderHasRentals(items: LineItem[]): boolean {
 export function orderHasDiscount(items: LineItem[]): boolean {
   if (!Array.isArray(items)) throw new Error("items must be an array");
   return items.some((item) =>
-    isPriceableItem(item) && (item.price!.discount_percent ?? 0) > 0
+    isPreTaxItem(item) && (item.price as PriceObject).discount !== null
   );
 }
 
 export function orderHasTax(items: LineItem[]): boolean {
   if (!Array.isArray(items)) throw new Error("items must be an array");
   return items.some((item) =>
-    isPriceableItem(item) && item.price!.tax_profile !== "tax_none"
+    isPreTaxItem(item) && (item.price as PriceObject).taxes.length > 0
   );
 }
 
 // ── Item consolidation and destination grouping ──────────────────
 
-const NON_PRODUCT_TYPES = new Set(["destination", "group", "surcharge"]);
+const NON_PRODUCT_TYPES = new Set(["destination", "group", "surcharge", "transaction_fee"]);
 const DELIVERY_TYPES = new Set(["rental", "sale"]);
 const COLLECTION_TYPES = new Set(["rental"]);
 
@@ -329,18 +485,18 @@ export function consolidateItems(lineItems: LineItem[]): ConsolidatedItem[] {
     if (NON_PRODUCT_TYPES.has(item.type!)) continue;
     if (!item.uid) continue;
 
+    const total = item.price && "total" in item.price ? (item.price.total || 0) : 0;
+
     if (map[item.uid]) {
       map[item.uid].quantity += item.quantity || 0;
-      map[item.uid].total_price = map[item.uid].total_price.add(
-        item.price?.total || 0,
-      );
+      map[item.uid].total_price = map[item.uid].total_price.add(total);
     } else {
       map[item.uid] = {
         uid: item.uid,
         name: item.name || "",
         type: item.type || "",
         quantity: item.quantity || 0,
-        total_price: currency(item.price?.total || 0),
+        total_price: currency(total),
         stock_method: item.stock_method || "none",
       };
     }
@@ -508,6 +664,7 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
 export interface GroupTotalsResult {
   count: number;
   subtotal: number;
+  subtotal_discounted: number;
   total: number;
 }
 
@@ -517,10 +674,11 @@ export interface GroupTotalsResult {
 export function getGroupTotals(
   items: LineItem[],
   index: number,
+  taxes: Tax[],
 ): GroupTotalsResult {
   const children = getGroupItems(items, index);
-  if (children.length === 0) return { count: 0, subtotal: 0, total: 0 };
+  if (children.length === 0) return { count: 0, subtotal: 0, subtotal_discounted: 0, total: 0 };
 
-  const { subtotal, total } = calculateOrderTotals(children);
-  return { count: children.length, subtotal, total };
+  const { subtotal, subtotal_discounted, total } = calculateOrderTotals(children, taxes);
+  return { count: children.length, subtotal, subtotal_discounted, total };
 }
