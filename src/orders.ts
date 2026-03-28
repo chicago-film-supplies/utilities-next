@@ -11,7 +11,6 @@ import type {
   DiscountType,
   PriceModifierType,
   PriceFormulaType,
-  OrderDocItemPriceType,
   OrderDocTotalsType,
   Tax as SchemaTax,
 } from "@cfs/schemas";
