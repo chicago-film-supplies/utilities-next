@@ -272,7 +272,8 @@ Deno.test("formatChargeDays throws for zero", () => {
 });
 
 Deno.test("formatChargeDays throws for invalid unit", () => {
-  assertThrows(() => formatChargeDays(3, "months"), Error, "unit must be one of");
+  // deno-lint-ignore no-explicit-any
+  assertThrows(() => formatChargeDays(3, "months" as any), Error, "unit must be one of");
 });
 
 // ── toChargeDays ─────────────────────────────────────────────────
