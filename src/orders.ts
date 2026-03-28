@@ -7,63 +7,57 @@
  */
 
 import currency from "currency.js";
+import type {
+  DiscountType,
+  PriceModifierType,
+  PriceFormulaType,
+  OrderDocItemPriceType,
+  OrderDocTotalsType,
+  Tax as SchemaTax,
+} from "@cfs/schemas";
 
 // ── Types ────────────────────────────────────────────────────────
 
-export interface Discount {
-  rate: number;
-  type: "percent" | "flat";
-  amount: number;
-}
+/** @see {@link DiscountType} from `@cfs/schemas` */
+export type Discount = DiscountType;
 
-export interface PriceModifier {
-  /** Tax doc uid (for taxes) or product uid (for fees). */
-  uid: string;
-  name: string;
-  rate: number;
-  type: "percent" | "flat";
-  amount: number;
-}
+/** @see {@link PriceModifierType} from `@cfs/schemas` */
+export type PriceModifier = PriceModifierType;
 
+/**
+ * Intermediate price representation used during price construction.
+ * Differs from {@link OrderDocItemPriceType} in that `base` and `total`
+ * are optional (not yet computed).
+ */
 export interface PriceObject {
   base?: number;
-  formula: string;
+  formula: PriceFormulaType;
   chargeable_days: number | null;
-  discount: Discount | null;
-  taxes: PriceModifier[];
+  discount: DiscountType | null;
+  taxes: PriceModifierType[];
   subtotal: number;
   subtotal_discounted: number;
   total?: number;
 }
 
-export interface Tax {
-  uid: string;
-  name: string;
-  rate: number;
-  type: "percent" | "flat";
-}
+/** Subset of the full Tax document needed by utility functions. */
+export type Tax = Pick<SchemaTax, "uid" | "name" | "rate" | "type">;
 
 export interface LineItem {
   uid?: string;
   name?: string;
   type?: string;
   quantity?: number;
-  price?: PriceObject | PriceModifier;
+  price?: PriceObject | PriceModifierType;
   stock_method?: string;
-  uid_component_of?: string;
-  uid_delivery?: string;
-  uid_collection?: string;
-  zero_priced?: boolean;
+  uid_component_of?: string | null;
+  uid_delivery?: string | null;
+  uid_collection?: string | null;
+  zero_priced?: boolean | null;
 }
 
-export interface OrderTotals {
-  discount_amount: number;
-  subtotal: number;
-  subtotal_discounted: number;
-  taxes: PriceModifier[];
-  transaction_fees: PriceModifier[];
-  total: number;
-}
+/** @see {@link OrderDocTotalsType} from `@cfs/schemas` */
+export type OrderTotals = OrderDocTotalsType;
 
 // ── Type guards ──────────────────────────────────────────────────
 

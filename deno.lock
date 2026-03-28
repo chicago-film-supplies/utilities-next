@@ -1,13 +1,21 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@cfs/schemas@^2.0.0-beta.12": "2.0.0",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "npm:@date-fns/tz@1": "1.4.1",
     "npm:currency.js@2": "2.0.4",
-    "npm:date-fns@4": "4.1.0"
+    "npm:date-fns@4": "4.1.0",
+    "npm:zod@^4.3.6": "4.3.6"
   },
   "jsr": {
+    "@cfs/schemas@2.0.0": {
+      "integrity": "913d553c2161a4afde00b238e15496c3b2401b6d4005d8f95a6492d9d1bd2f70",
+      "dependencies": [
+        "npm:zod"
+      ]
+    },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
       "dependencies": [
@@ -27,10 +35,14 @@
     },
     "date-fns@4.1.0": {
       "integrity": "sha512-Ukq0owbQXxa/U3EGtsdVBkR1w7KOQ5gIBqdH2hkvknzZPYvBxb/aa6E8L7tmjFtkwZBu3UXBbjIgPo/Ez4xaNg=="
+    },
+    "zod@4.3.6": {
+      "integrity": "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="
     }
   },
   "workspace": {
     "dependencies": [
+      "jsr:@cfs/schemas@^2.0.0-beta.12",
       "jsr:@std/assert@1",
       "npm:@date-fns/tz@1",
       "npm:currency.js@2",
