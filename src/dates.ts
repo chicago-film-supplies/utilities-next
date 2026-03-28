@@ -28,10 +28,12 @@ export interface FormatChargeDaysResult {
 
 /**
  * Format a chargeable days number into display values for a duration input.
+ * @param days - A positive number of chargeable days.
+ * @param unit - Display unit: `"day"`, `"days"`, `"week"`, or `"weeks"`. When omitted, weeks are used if `days >= 5`.
  */
 export function formatChargeDays(
   days: number,
-  unit?: string,
+  unit?: "day" | "days" | "week" | "weeks",
 ): FormatChargeDaysResult {
   if (typeof days !== "number" || !isFinite(days) || days <= 0) {
     throw new Error("days must be a positive number; days: " + days);

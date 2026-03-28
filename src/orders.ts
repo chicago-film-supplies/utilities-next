@@ -87,7 +87,8 @@ export function isPreTaxItem(item: LineItem): boolean {
 
 // ── Days factor ──────────────────────────────────────────────────
 
-function getDaysFactor(formula: string, chargeable_days: number | null): number {
+/** @param formula - Pricing formula: `"five_day_week"` or `"fixed"`. */
+function getDaysFactor(formula: "five_day_week" | "fixed", chargeable_days: number | null): number {
   if (formula === "five_day_week") {
     return (chargeable_days ?? 0) / 5;
   }
