@@ -31,9 +31,11 @@ import {
 import { TZDate, tz } from "@date-fns/tz";
 
 /** Display values returned by {@link formatChargeDays}. */
+export type ChargeDaysLabel = "day" | "days" | "week" | "weeks";
+
 export interface FormatChargeDaysResult {
   value: number;
-  label: string;
+  label: ChargeDaysLabel;
   periodLabel: string;
   isWeeks: boolean;
   step: number;
@@ -67,7 +69,7 @@ export function formatChargeDays(
   const value = isWeeks ? days / 5 : days;
   const step = isWeeks ? 0.2 : 1;
 
-  let label: string;
+  let label: ChargeDaysLabel;
   if (isWeeks) {
     label = value === 1 ? "week" : "weeks";
   } else {
@@ -198,7 +200,7 @@ export interface BusinessDaysResult {
   calendarWeeks: number;
   days: number;
   weeks: number;
-  label: string;
+  label: ChargeDaysLabel;
   periodLabel: string;
 }
 
@@ -236,8 +238,8 @@ export function countCfsBusinessDays(
   const weeks = days / 5;
   const calendarWeeks = calendarDays / 5;
 
-  let label = "";
-  let periodLabel = "";
+  let label: ChargeDaysLabel = "days";
+  let periodLabel = "0 days";
   if (days > 0) {
     ({ label, periodLabel } = formatChargeDays(days));
   }
