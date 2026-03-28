@@ -1,9 +1,31 @@
 /**
- * @cfs/utilities/orders
- *
  * Shared order utility functions for CFS applications.
  * Includes pricing calculations, item consolidation, and destination grouping.
  * All arithmetic uses currency.js for safe floating-point calculations.
+ *
+ * ```ts
+ * import { calculateOrderTotals } from "@cfs/utilities/orders";
+ *
+ * const items = [
+ *   {
+ *     type: "rental",
+ *     quantity: 1,
+ *     price: {
+ *       base: 100,
+ *       formula: "five_day_week",
+ *       chargeable_days: 5,
+ *       discount: null,
+ *       taxes: [],
+ *       subtotal: 100,
+ *       subtotal_discounted: 100,
+ *     },
+ *   },
+ * ];
+ * const totals = calculateOrderTotals(items, []);
+ * console.log(totals.total); // 100
+ * ```
+ *
+ * @module
  */
 
 import currency from "currency.js";
@@ -42,6 +64,7 @@ export interface PriceObject {
 /** Subset of the full Tax document needed by utility functions. */
 export type Tax = Pick<SchemaTax, "uid" | "name" | "rate" | "type">;
 
+/** A single line item in an order (product, destination, group, surcharge, or fee). */
 export interface LineItem {
   uid?: string;
   name?: string;
@@ -416,6 +439,7 @@ const NON_PRODUCT_TYPES = new Set(["destination", "group", "surcharge", "transac
 const DELIVERY_TYPES = new Set(["rental", "sale"]);
 const COLLECTION_TYPES = new Set(["rental"]);
 
+/** Destination, group, and parent-product context for a line item. */
 export interface GroupPath {
   destination: string | null;
   group: string | null;
@@ -448,6 +472,7 @@ export function getGroupPath(items: LineItem[], index: number): GroupPath {
   return result;
 }
 
+/** A deduplicated line item with summed quantities and prices. */
 export interface ConsolidatedItem {
   uid: string;
   name: string;
@@ -512,6 +537,7 @@ export function consolidateItems(lineItems: LineItem[]): ConsolidatedItem[] {
   }));
 }
 
+/** A destination section with its delivery/collection UIDs and child items. */
 export interface DestinationGroup {
   uid_delivery: string;
   uid_collection: string;
@@ -658,6 +684,7 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
   return indices.sort((a, b) => a - b);
 }
 
+/** Count and pricing totals for a collapsed destination or group section. */
 export interface GroupTotalsResult {
   count: number;
   subtotal: number;

@@ -1,8 +1,20 @@
 /**
- * @cfs/utilities/dates
- *
  * Pure date helper functions for CFS applications.
  * All functions accept holidays as a parameter to enable client-side calculations.
+ *
+ * ```ts
+ * import { formatChargeDays, countCfsBusinessDays } from "@cfs/utilities/dates";
+ *
+ * const result = formatChargeDays(10);
+ * console.log(result.periodLabel); // "2 weeks"
+ *
+ * const start = new Date("2025-01-06");
+ * const end = new Date("2025-01-10");
+ * const days = countCfsBusinessDays(start, end, []);
+ * console.log(days.days); // 5
+ * ```
+ *
+ * @module
  */
 
 import {
@@ -18,6 +30,7 @@ import {
 } from "date-fns";
 import { TZDate, tz } from "@date-fns/tz";
 
+/** Display values returned by {@link formatChargeDays}. */
 export interface FormatChargeDaysResult {
   value: number;
   label: string;
@@ -179,6 +192,7 @@ export function getEndDateByChargePeriod(
   return endDate;
 }
 
+/** Result of a business-day count between two dates. */
 export interface BusinessDaysResult {
   calendarDays: number;
   calendarWeeks: number;
@@ -231,6 +245,7 @@ export function countCfsBusinessDays(
   return { calendarDays, calendarWeeks, days, weeks, label, periodLabel };
 }
 
+/** Date strings required by {@link getDuration}. */
 export interface DurationDates {
   delivery_start: string;
   collection_start: string;
@@ -238,6 +253,7 @@ export interface DurationDates {
   charge_end?: string;
 }
 
+/** Active and chargeable duration breakdown returned by {@link getDuration}. */
 export interface DurationResult {
   activeDays: number;
   activeWeeks: number;
