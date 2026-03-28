@@ -12,10 +12,6 @@
       "prepareCmd": "deno eval \"const c = JSON.parse(Deno.readTextFileSync('deno.json')); c.version = '${nextRelease.version}'; Deno.writeTextFileSync('deno.json', JSON.stringify(c, null, 2) + '\\n');\"",
       "publishCmd": "deno publish --allow-dirty"
     }],
-    ["@semantic-release/git", {
-      "assets": ["deno.json"],
-      "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
-    }],
     "@semantic-release/github"
   ]
 }

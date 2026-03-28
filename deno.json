@@ -1,12 +1,13 @@
 {
   "name": "@cfs/utilities",
-  "version": "2.0.0",
+  "version": "0.0.0",
   "license": "MIT",
   "exports": {
     "./dates": "./src/dates.ts",
     "./orders": "./src/orders.ts"
   },
   "tasks": {
+    "setup": "deno install && git config core.hooksPath .githooks",
     "test": "deno test tests/",
     "lint": "deno lint",
     "check": "deno check src/dates.ts src/orders.ts"
@@ -15,7 +16,8 @@
     "date-fns": "npm:date-fns@^4",
     "@date-fns/tz": "npm:@date-fns/tz@^1",
     "currency.js": "npm:currency.js@^2",
-    "@std/assert": "jsr:@std/assert@^1"
+    "@std/assert": "jsr:@std/assert@^1",
+    "@cfs/schemas": "jsr:@cfs/schemas@^2.0.0-beta.12"
   },
   "compilerOptions": {
     "strict": true
