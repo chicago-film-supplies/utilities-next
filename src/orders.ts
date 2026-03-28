@@ -388,11 +388,13 @@ export function calculateOrderTotals(
 
 // ── Order inspection helpers ─────────────────────────────────────
 
+/** Check whether any line item is a rental. */
 export function orderHasRentals(items: LineItem[]): boolean {
   if (!Array.isArray(items)) throw new Error("items must be an array");
   return items.some((item) => item.type === "rental");
 }
 
+/** Check whether any pre-tax line item has a discount. */
 export function orderHasDiscount(items: LineItem[]): boolean {
   if (!Array.isArray(items)) throw new Error("items must be an array");
   return items.some((item) =>
@@ -400,6 +402,7 @@ export function orderHasDiscount(items: LineItem[]): boolean {
   );
 }
 
+/** Check whether any pre-tax line item has taxes applied. */
 export function orderHasTax(items: LineItem[]): boolean {
   if (!Array.isArray(items)) throw new Error("items must be an array");
   return items.some((item) =>
