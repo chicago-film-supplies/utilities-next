@@ -6,6 +6,7 @@ import {
   calculateItemTax,
   calculateItemTotal,
   calculateOrderTotals,
+  calculateReplacementTotals,
   consolidateItems,
   getGroupItems,
   getGroupPath,
@@ -487,6 +488,94 @@ Deno.test("orderHasTax detects taxed items", () => {
     true,
   );
   assertEquals(orderHasTax([makeItem()]), false);
+});
+
+// ── calculateReplacementTotals ───────────────────────────────────
+
+Deno.test("calculateReplacementTotals returns zeros when no replacement values", () => {
+  const items = [makeItem(), makeItem()];
+  const result = calculateReplacementTotals(items, TAXES);
+  assertEquals(result.subtotal, 0);
+  assertEquals(result.tax, 0);
+  assertEquals(result.total, 0);
+});
+
+Deno.test("calculateReplacementTotals sums replacement values across items", () => {
+  const items = [
+    makeItem({ quantity: 1 }, { replacement: 500 }),
+    makeItem({ quantity: 2 }, { replacement: 300 }),
+  ];
+  const result = calculateReplacementTotals(items, TAXES);
+  // 500 * 1 + 300 * 2 = 1100
+  assertEquals(result.subtotal, 1100);
+  assertEquals(result.tax, 0);
+  assertEquals(result.total, 1100);
+});
+
+Deno.test("calculateReplacementTotals applies percent tax to replacement subtotal", () => {
+  const items = [
+    makeItem({ quantity: 1 }, { replacement: 1000, taxes: [{ uid: "chi-sales-tax" }] }),
+  ];
+  const result = calculateReplacementTotals(items, TAXES);
+  // subtotal = 1000, tax = 1000 * 0.1025 = 102.50
+  assertEquals(result.subtotal, 1000);
+  assertEquals(result.tax, 102.50);
+  assertEquals(result.total, 1102.50);
+});
+
+Deno.test("calculateReplacementTotals applies flat tax per unit", () => {
+  const items = [
+    makeItem({ quantity: 10 }, { replacement: 50, formula: "fixed", taxes: [{ uid: "water-bottle-tax" }] }),
+  ];
+  const result = calculateReplacementTotals(items, TAXES);
+  // subtotal = 50 * 10 = 500, tax = 0.05 * 10 = 0.50
+  assertEquals(result.subtotal, 500);
+  assertEquals(result.tax, 0.50);
+  assertEquals(result.total, 500.50);
+});
+
+Deno.test("calculateReplacementTotals skips items with null replacement", () => {
+  const items = [
+    makeItem({ quantity: 1 }, { replacement: 500 }),
+    makeItem({ quantity: 1 }, { replacement: null }),
+  ];
+  const result = calculateReplacementTotals(items, TAXES);
+  assertEquals(result.subtotal, 500);
+  assertEquals(result.total, 500);
+});
+
+Deno.test("calculateReplacementTotals skips non-priceable items", () => {
+  const items: LineItem[] = [
+    makeItem({ quantity: 1 }, { replacement: 500 }),
+    { type: "destination" },
+  ];
+  const result = calculateReplacementTotals(items, TAXES);
+  assertEquals(result.subtotal, 500);
+});
+
+Deno.test("calculateReplacementTotals skips transaction fee items", () => {
+  const items = [
+    makeItem({ quantity: 1 }, { replacement: 500 }),
+    makeFeeItem(),
+  ];
+  const result = calculateReplacementTotals(items, TAXES);
+  assertEquals(result.subtotal, 500);
+});
+
+Deno.test("calculateReplacementTotals multi-tax on replacement", () => {
+  const items = [
+    makeItem({ quantity: 2 }, {
+      replacement: 200,
+      taxes: [{ uid: "chi-sales-tax" }, { uid: "chi-rental-tax" }],
+    }),
+  ];
+  const result = calculateReplacementTotals(items, TAXES);
+  // subtotal = 200 * 2 = 400
+  // sales tax = 400 * 0.1025 = 41
+  // rental tax = 400 * 0.15 = 60
+  assertEquals(result.subtotal, 400);
+  assertEquals(result.tax, 101);
+  assertEquals(result.total, 501);
 });
 
 // ── getGroupPath ─────────────────────────────────────────────────

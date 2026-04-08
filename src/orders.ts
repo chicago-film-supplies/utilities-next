@@ -52,6 +52,7 @@ export type PriceModifier = PriceModifierType;
  */
 export interface PriceObject {
   base?: number;
+  replacement?: number | null;
   formula: PriceFormulaType;
   chargeable_days: number | null;
   discount: DiscountType | null;
@@ -431,6 +432,64 @@ export function orderHasTax(items: LineItem[]): boolean {
   return items.some((item) =>
     isPreTaxItem(item) && (item.price as PriceObject).taxes.length > 0
   );
+}
+
+// ── Replacement totals ──────────────────────────────────────────
+
+/** Replacement cost totals for an order, with and without tax. */
+export interface ReplacementTotals {
+  subtotal: number;
+  tax: number;
+  total: number;
+}
+
+/**
+ * Calculate the total replacement cost across all pre-tax items that have
+ * a replacement value on their price object.
+ *
+ * Returns `subtotal` (sum of replacement × quantity), `tax` (taxes applied
+ * to that subtotal), and `total` (subtotal + tax).
+ */
+export function calculateReplacementTotals(
+  items: LineItem[],
+  taxes: Tax[],
+): ReplacementTotals {
+  if (!Array.isArray(items)) {
+    throw new Error("items must be an array");
+  }
+
+  let subtotal = currency(0);
+  let taxTotal = currency(0);
+
+  for (const item of items) {
+    if (!isPreTaxItem(item)) continue;
+
+    const price = item.price as PriceObject;
+    if (price.replacement == null) continue;
+
+    const quantity = item.quantity || 0;
+    const itemReplacementSubtotal = currency(price.replacement).multiply(quantity);
+    subtotal = subtotal.add(itemReplacementSubtotal);
+
+    for (const itemTax of price.taxes) {
+      const taxDoc = taxes.find((t) => t.uid === itemTax.uid);
+      if (!taxDoc) continue;
+
+      if (taxDoc.type === "percent") {
+        taxTotal = taxTotal.add(
+          itemReplacementSubtotal.multiply(taxDoc.rate / 100),
+        );
+      } else {
+        taxTotal = taxTotal.add(currency(taxDoc.rate).multiply(quantity));
+      }
+    }
+  }
+
+  return {
+    subtotal: subtotal.value,
+    tax: taxTotal.value,
+    total: subtotal.add(taxTotal).value,
+  };
 }
 
 // ── Item consolidation and destination grouping ──────────────────
