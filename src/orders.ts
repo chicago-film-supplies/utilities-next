@@ -495,6 +495,7 @@ export function calculateReplacementTotals(
 // ── Item consolidation and destination grouping ──────────────────
 
 const NON_PRODUCT_TYPES = new Set(["destination", "group", "surcharge", "transaction_fee"]);
+const PACKING_LIST_ITEM_TYPES = new Set(["rental", "sale"]);
 const DELIVERY_TYPES = new Set(["rental", "sale"]);
 const COLLECTION_TYPES = new Set(["rental"]);
 
@@ -764,4 +765,88 @@ export function getGroupTotals(
 
   const { subtotal, subtotal_discounted, total } = calculateOrderTotals(children, taxes);
   return { count: children.length, subtotal, subtotal_discounted, total };
+}
+
+/** An expanded packing list entry preserving group context. */
+export interface PackingListItem {
+  uid: string;
+  name: string;
+  type: string;
+  quantity: number;
+  stock_method: string;
+  group_name: string | null;
+}
+
+/**
+ * Build a packing list from order line items.
+ *
+ * When `consolidated` is true, deduplicates by product UID and sums quantities
+ * (delegates to {@link consolidateItems}). When false (default), returns
+ * expanded entries with `group_name` preserved.
+ *
+ * Pass `destinationUid` to scope to a single destination; omit for the full order.
+ *
+ * Excludes structural rows, surcharges, transaction fees, and services.
+ */
+export function buildPackingList(
+  items: LineItem[],
+  consolidated?: boolean,
+  destinationUid?: string,
+): PackingListItem[] | ConsolidatedItem[] {
+  if (!Array.isArray(items)) {
+    throw new Error("items must be an array");
+  }
+
+  // Scope to destination if requested
+  let scoped: LineItem[];
+  if (destinationUid) {
+    scoped = [];
+    let inDestination = false;
+    for (const item of items) {
+      if (item.type === "destination") {
+        inDestination = item.uid_delivery === destinationUid ||
+          item.uid_collection === destinationUid;
+        continue;
+      }
+      if (inDestination) scoped.push(item);
+    }
+  } else {
+    scoped = items;
+  }
+
+  // Filter to packing-list-eligible items
+  const filtered = scoped.filter(
+    (item) => item.uid && PACKING_LIST_ITEM_TYPES.has(item.type!),
+  );
+
+  if (consolidated) {
+    return consolidateItems(filtered);
+  }
+
+  // Expanded: walk the scoped array to track current group name
+  const result: PackingListItem[] = [];
+  let currentGroup: string | null = null;
+
+  for (const item of scoped) {
+    if (item.type === "group") {
+      currentGroup = item.name ?? null;
+      continue;
+    }
+    if (item.type === "destination") {
+      currentGroup = null;
+      continue;
+    }
+    if (!item.uid || !PACKING_LIST_ITEM_TYPES.has(item.type!)) continue;
+
+    result.push({
+      uid: item.uid,
+      name: item.name || "",
+      type: item.type || "",
+      quantity: item.quantity || 0,
+      stock_method: item.stock_method || "none",
+      group_name: currentGroup,
+    });
+  }
+
+  return result;
 }

@@ -7,6 +7,7 @@ import {
   calculateItemTotal,
   calculateOrderTotals,
   calculateReplacementTotals,
+  buildPackingList,
   consolidateItems,
   getGroupItems,
   getGroupPath,
@@ -730,4 +731,93 @@ Deno.test("getGroupTotals returns zeros for empty group", () => {
   assertEquals(result.subtotal, 0);
   assertEquals(result.subtotal_discounted, 0);
   assertEquals(result.total, 0);
+});
+
+// ── buildPackingList ────────────────────────────────────────────
+
+Deno.test("buildPackingList returns expanded items with group context", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid_delivery: "d1", uid_collection: "d1" },
+    { type: "group", name: "Tables" },
+    makeItem({ uid: "p1", type: "rental", name: "Round Table" }),
+    makeItem({ uid: "p2", type: "sale", name: "Tablecloth" }),
+    { type: "group", name: "Chairs" },
+    makeItem({ uid: "p3", type: "rental", name: "Folding Chair" }),
+  ];
+  const result = buildPackingList(items);
+  assertEquals(result.length, 3);
+  assertEquals(result[0], {
+    uid: "p1", name: "Round Table", type: "rental",
+    quantity: 1, stock_method: "none", group_name: "Tables",
+  });
+  assertEquals(result[1], {
+    uid: "p2", name: "Tablecloth", type: "sale",
+    quantity: 1, stock_method: "none", group_name: "Tables",
+  });
+  assertEquals(result[2], {
+    uid: "p3", name: "Folding Chair", type: "rental",
+    quantity: 1, stock_method: "none", group_name: "Chairs",
+  });
+});
+
+Deno.test("buildPackingList excludes surcharges, fees, and structural items", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid_delivery: "d1" },
+    makeItem({ uid: "p1", type: "rental" }),
+    { type: "surcharge", uid: "s1", name: "Damage Waiver" },
+    { type: "transaction_fee", uid: "f1", name: "CC Fee" },
+    { type: "group", name: "G1" },
+  ];
+  const result = buildPackingList(items);
+  assertEquals(result.length, 1);
+  assertEquals(result[0].uid, "p1");
+});
+
+Deno.test("buildPackingList scoped to destination", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid_delivery: "d1", uid_collection: "d1" },
+    makeItem({ uid: "p1", type: "rental" }),
+    makeItem({ uid: "p2", type: "sale" }),
+    { type: "destination", uid_delivery: "d2", uid_collection: "d2" },
+    makeItem({ uid: "p3", type: "rental" }),
+  ];
+  const result = buildPackingList(items, false, "d2");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].uid, "p3");
+});
+
+Deno.test("buildPackingList consolidated deduplicates by uid", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid_delivery: "d1" },
+    makeItem({ uid: "p1", type: "rental", quantity: 2 }),
+    { type: "destination", uid_delivery: "d2" },
+    makeItem({ uid: "p1", type: "rental", quantity: 3 }),
+  ];
+  const result = buildPackingList(items, true);
+  assertEquals(result.length, 1);
+  assertEquals(result[0].uid, "p1");
+  assertEquals(result[0].quantity, 5);
+});
+
+Deno.test("buildPackingList consolidated + destination scoped", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid_delivery: "d1" },
+    makeItem({ uid: "p1", type: "rental", quantity: 2 }),
+    { type: "destination", uid_delivery: "d2" },
+    makeItem({ uid: "p1", type: "rental", quantity: 3 }),
+    makeItem({ uid: "p2", type: "sale", quantity: 1 }),
+  ];
+  const result = buildPackingList(items, true, "d2");
+  assertEquals(result.length, 2);
+  assertEquals(result.find((r) => r.uid === "p1")!.quantity, 3);
+  assertEquals(result.find((r) => r.uid === "p2")!.quantity, 1);
+});
+
+Deno.test("buildPackingList returns empty for no eligible items", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid_delivery: "d1" },
+    { type: "surcharge", uid: "s1" },
+  ];
+  assertEquals(buildPackingList(items).length, 0);
+  assertEquals(buildPackingList(items, true).length, 0);
 });
