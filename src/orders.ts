@@ -73,7 +73,7 @@ export interface LineItem {
   quantity?: number;
   price?: PriceObject | PriceModifierType;
   stock_method?: string;
-  uid_component_of?: string | null;
+  path?: string[];
   uid_delivery?: string | null;
   uid_collection?: string | null;
   zero_priced?: boolean | null;
@@ -515,7 +515,7 @@ export function getGroupPath(items: LineItem[], index: number): GroupPath {
   const result: GroupPath = {
     destination: null,
     group: null,
-    product: item?.uid_component_of ?? null,
+    product: item?.path?.at(-1) ?? null,
   };
 
   for (let i = index - 1; i >= 0; i--) {
@@ -699,7 +699,7 @@ export function getGroupItems(items: LineItem[], index: number): LineItem[] {
   }
 
   return items.filter(
-    (i) => i.uid_component_of === item.uid && i.zero_priced === true,
+    (i) => i.path?.at(-1) === item.uid && i.zero_priced === true,
   );
 }
 
@@ -733,7 +733,7 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
     return indices;
   }
 
-  // Product: self + ALL descendants via uid_component_of chain
+  // Product: self + ALL descendants via path chain
   const indexSet = new Set([index]);
   const descendantUids = new Set<string>();
   if (item.uid) descendantUids.add(item.uid);
@@ -743,7 +743,8 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
     prevSize = descendantUids.size;
     for (let i = 0; i < items.length; i++) {
       if (indexSet.has(i)) continue;
-      if (items[i].uid_component_of && descendantUids.has(items[i].uid_component_of!)) {
+      const parentUid = items[i].path?.at(-1);
+      if (parentUid && descendantUids.has(parentUid)) {
         indexSet.add(i);
         if (items[i].uid) descendantUids.add(items[i].uid!);
       }

@@ -698,8 +698,8 @@ Deno.test("getGroupItems collects group children", () => {
 Deno.test("getGroupItems collects zero-priced components for product", () => {
   const items: LineItem[] = [
     makeItem({ uid: "parent" }),
-    makeItem({ uid: "child1", uid_component_of: "parent", zero_priced: true }),
-    makeItem({ uid: "child2", uid_component_of: "parent", zero_priced: true }),
+    makeItem({ uid: "child1", path: ["parent"], zero_priced: true }),
+    makeItem({ uid: "child2", path: ["parent"], zero_priced: true }),
     makeItem({ uid: "other" }),
   ];
   const result = getGroupItems(items, 0);
