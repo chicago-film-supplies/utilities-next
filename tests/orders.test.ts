@@ -1,4 +1,5 @@
 import { assertEquals, assertThrows } from "@std/assert";
+import { getInitialValues, OrderDocLineItem, OrderDocTransactionFeeItem } from "@cfs/schemas";
 import {
   calculateItemDiscount,
   calculateItemPrice,
@@ -26,6 +27,11 @@ import {
   orderHasTax,
 } from "../src/orders.ts";
 
+const lineItemBase = getInitialValues(OrderDocLineItem) as Record<string, unknown>;
+const priceBase = lineItemBase.price as Record<string, unknown>;
+const feeItemBase = getInitialValues(OrderDocTransactionFeeItem) as Record<string, unknown>;
+const feePriceBase = feeItemBase.price as Record<string, unknown>;
+
 const TAXES: Tax[] = [
   { uid: "chi-rental-tax", name: "Chicago Rental Tax", rate: 15, type: "percent" },
   { uid: "chi-sales-tax", name: "Chicago Sales Tax", rate: 10.25, type: "percent" },
@@ -39,22 +45,17 @@ function makeItem(
   priceOverrides: Record<string, unknown> = {},
 ): LineItem {
   return {
+    ...lineItemBase,
     name: "Test Item",
-    type: "rental",
     quantity: 1,
     ...overrides,
     price: {
+      ...priceBase,
       base: 100,
-      formula: "five_day_week",
       chargeable_days: 5,
-      discount: null,
-      taxes: [],
-      subtotal: 0,
-      subtotal_discounted: 0,
-      total: 0,
       ...priceOverrides,
     },
-  };
+  } as LineItem;
 }
 
 function makeFeeItem(
@@ -62,19 +63,18 @@ function makeFeeItem(
   feeOverrides: Record<string, unknown> = {},
 ): LineItem {
   return {
+    ...feeItemBase,
     name: "CC Processing Fee",
-    type: "transaction_fee",
     quantity: 1,
     ...overrides,
     price: {
+      ...feePriceBase,
       uid: "cc-fee-product",
       name: "Credit Card Processing Fee",
       rate: 3,
-      type: "percent" as const,
-      amount: 0,
       ...feeOverrides,
     },
-  };
+  } as LineItem;
 }
 
 // ── isPriceableItem ──────────────────────────────────────────────
@@ -748,15 +748,15 @@ Deno.test("buildPackingList returns expanded items with group context", () => {
   assertEquals(result.length, 3);
   assertEquals(result[0], {
     uid: "p1", name: "Round Table", type: "rental",
-    quantity: 1, stock_method: "none", group_name: "Tables",
+    quantity: 1, stock_method: "bulk", group_name: "Tables",
   });
   assertEquals(result[1], {
     uid: "p2", name: "Tablecloth", type: "sale",
-    quantity: 1, stock_method: "none", group_name: "Tables",
+    quantity: 1, stock_method: "bulk", group_name: "Tables",
   });
   assertEquals(result[2], {
     uid: "p3", name: "Folding Chair", type: "rental",
-    quantity: 1, stock_method: "none", group_name: "Chairs",
+    quantity: 1, stock_method: "bulk", group_name: "Chairs",
   });
 });
 

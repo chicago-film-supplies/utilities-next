@@ -1,11 +1,14 @@
 import { assertEquals } from "@std/assert";
 import { buildComponentEntries, removeComponentEntries } from "../src/products.ts";
+import { ComponentSchema, getInitialValues } from "@cfs/schemas";
 import type { ProductComponent } from "@cfs/schemas";
 
 // ── helpers ─────────────────────────────────────────────────────────
 
+const componentBase = getInitialValues(ComponentSchema) as Record<string, unknown>;
+
 function comp(uid: string, path: string[]): ProductComponent {
-  return { uid, path } as ProductComponent;
+  return { ...componentBase, uid, path } as ProductComponent;
 }
 
 // ── removeComponentEntries ──────────────────────────────────────────
