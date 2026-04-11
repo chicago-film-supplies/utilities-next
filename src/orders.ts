@@ -733,15 +733,24 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
     return indices;
   }
 
-  // Product: self + ALL components (regardless of zero_priced)
-  const uid = item.uid;
-  const indices = [index];
-  for (let i = 0; i < items.length; i++) {
-    if (i !== index && items[i].uid_component_of === uid) {
-      indices.push(i);
+  // Product: self + ALL descendants via uid_component_of chain
+  const indexSet = new Set([index]);
+  const descendantUids = new Set<string>();
+  if (item.uid) descendantUids.add(item.uid);
+
+  let prevSize = 0;
+  while (descendantUids.size > prevSize) {
+    prevSize = descendantUids.size;
+    for (let i = 0; i < items.length; i++) {
+      if (indexSet.has(i)) continue;
+      if (items[i].uid_component_of && descendantUids.has(items[i].uid_component_of!)) {
+        indexSet.add(i);
+        if (items[i].uid) descendantUids.add(items[i].uid!);
+      }
     }
   }
-  return indices.sort((a, b) => a - b);
+
+  return [...indexSet].sort((a, b) => a - b);
 }
 
 /** Count and pricing totals for a collapsed destination or group section. */
