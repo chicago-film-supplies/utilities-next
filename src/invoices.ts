@@ -25,20 +25,23 @@ export {
   type PriceModifier,
   type PriceObject,
   type Tax,
+  type ConsolidatedItem,
+  type GroupPath,
+  type PreTaxLineItem,
+  type TransactionFeeLineItem,
+  type PriceableLineItem,
 } from "./orders.ts";
 
 import currency from "currency.js";
-import type { InvoiceDocItemPrice, PriceModifierType } from "@cfs/schemas";
+import type { InvoiceDocItemPrice, InvoiceDocTotals, PriceModifierType } from "@cfs/schemas";
 import {
   calculateItemSubtotal,
   getTotalDiscount,
   getTaxTotals,
   getTransactionFeeTotals,
-  isPriceableItem,
   isPreTaxItem,
   isTransactionFeeItem,
   type LineItem,
-  type PriceModifier,
   type PriceObject,
   type Tax,
 } from "./orders.ts";
@@ -53,7 +56,7 @@ const STRUCTURAL_TYPES = new Set(["destination", "group", "order"]);
  * billable line items suitable for Xero sync or totals calculation.
  */
 export function flattenForXero(items: LineItem[]): LineItem[] {
-  return items.filter((item) => !STRUCTURAL_TYPES.has(item.type ?? ""));
+  return items.filter((item) => !STRUCTURAL_TYPES.has(item.type));
 }
 
 // ── Invoice item type ──────────────────────────────────────────
@@ -79,17 +82,8 @@ export interface InvoiceItem extends LineItem {
 
 // ── Invoice totals ──────────────────────────────────────────────
 
-/** Invoice-level totals including payment tracking. */
-export interface InvoiceTotals {
-  discount_amount: number;
-  subtotal: number;
-  subtotal_discounted: number;
-  taxes: PriceModifier[];
-  transaction_fees: PriceModifier[];
-  total: number;
-  amount_paid: number;
-  amount_due: number;
-}
+/** @see {@link InvoiceDocTotals} from `@cfs/schemas` */
+export type InvoiceTotals = InvoiceDocTotals;
 
 /**
  * Calculate aggregated pricing totals for an invoice.
@@ -132,17 +126,16 @@ export function calculateInvoiceTotals(
   // Pass 2: transaction fees — computed from subtotal_discounted
   const feeItems: LineItem[] = [];
   for (const item of billable) {
-    if (!isTransactionFeeItem(item) || !isPriceableItem(item)) continue;
+    if (!isTransactionFeeItem(item)) continue;
 
-    const fee = item.price as PriceModifier;
     let amount: number;
-    if (fee.type === "percent") {
-      amount = currency(subtotal_discounted).multiply(fee.rate / 100).value;
+    if (item.price.type === "percent") {
+      amount = currency(subtotal_discounted).multiply(item.price.rate / 100).value;
     } else {
-      amount = currency(fee.rate).multiply(item.quantity || 0).value;
+      amount = currency(item.price.rate).multiply(item.quantity).value;
     }
 
-    feeItems.push({ ...item, price: { ...fee, amount } });
+    feeItems.push({ ...item, price: { ...item.price, amount } });
   }
 
   const transaction_fees = getTransactionFeeTotals(feeItems);
@@ -257,16 +250,16 @@ export function getSharedFields(keysA: string[], keysB: string[], excludes: stri
  * Stable key for path-based item matching.
  * Joins path segments with "/" to produce a unique positional identifier.
  */
-function itemPathKey(path: string[] | undefined): string {
-  return (path ?? []).join("/");
+function itemPathKey(path: string[]): string {
+  return path.join("/");
 }
 
 /**
  * Strip the order divider uid prefix from an invoice item's path.
  * Invoice items under an order divider have path = [orderDividerUid, ...originalPath].
  */
-function stripOrderPrefix(path: string[] | undefined, orderDividerUid: string): string[] {
-  if (!path || path.length === 0) return [];
+function stripOrderPrefix(path: string[], orderDividerUid: string): string[] {
+  if (path.length === 0) return [];
   if (path[0] === orderDividerUid) return path.slice(1);
   return path;
 }
@@ -330,7 +323,7 @@ export function isItemSynced(
   }
 
   for (const key of orderKeys) {
-    const a = (prevOrderItem as Record<string, unknown>)[key];
+    const a = (prevOrderItem as unknown as Record<string, unknown>)[key];
     const b = normalizedInvoice[key];
     if (JSON.stringify(a) !== JSON.stringify(b)) return false;
   }
@@ -433,7 +426,7 @@ export function syncOrderToInvoiceSelective(
 export function getOrderScopedItems(items: InvoiceItem[], orderDividerUid: string): InvoiceItem[] {
   return items.filter((item) =>
     (item.type === "order" && item.uid === orderDividerUid) ||
-    item.path?.[0] === orderDividerUid
+    item.path[0] === orderDividerUid
   );
 }
 
@@ -449,7 +442,7 @@ export function getOrderScopedItems(items: InvoiceItem[], orderDividerUid: strin
 export function removeOrderScopedItems(items: InvoiceItem[], orderDividerUid: string): InvoiceItem[] {
   return items.filter((item) =>
     !(item.type === "order" && item.uid === orderDividerUid) &&
-    item.path?.[0] !== orderDividerUid
+    item.path[0] !== orderDividerUid
   );
 }
 
@@ -548,7 +541,7 @@ export function syncOrderItems(
     if (origIndex === orderDividerIndex) break;
     if (
       !(item.type === "order" && item.uid === orderDividerUid) &&
-      item.path?.[0] !== orderDividerUid
+      item.path[0] !== orderDividerUid
     ) {
       insertAt++;
     }

@@ -84,15 +84,15 @@ Deno.test("isPriceableItem returns true for rental with price", () => {
 });
 
 Deno.test("isPriceableItem returns false for destination", () => {
-  assertEquals(isPriceableItem({ type: "destination" }), false);
+  assertEquals(isPriceableItem({ type: "destination" } as LineItem), false);
 });
 
 Deno.test("isPriceableItem returns false for group", () => {
-  assertEquals(isPriceableItem({ type: "group" }), false);
+  assertEquals(isPriceableItem({ type: "group" } as LineItem), false);
 });
 
 Deno.test("isPriceableItem returns false without price", () => {
-  assertEquals(isPriceableItem({ type: "rental" }), false);
+  assertEquals(isPriceableItem({ type: "rental" } as LineItem), false);
 });
 
 Deno.test("isPriceableItem returns true for transaction fee with price", () => {
@@ -120,7 +120,7 @@ Deno.test("isPreTaxItem returns false for transaction fee", () => {
 });
 
 Deno.test("isPreTaxItem returns false for destination", () => {
-  assertEquals(isPreTaxItem({ type: "destination" }), false);
+  assertEquals(isPreTaxItem({ type: "destination" } as LineItem), false);
 });
 
 // ── calculateItemSubtotal ────────────────────────────────────────
@@ -195,7 +195,7 @@ Deno.test("calculateItemSubtotal fixed with quantity and percent discount", () =
 
 Deno.test("calculateItemSubtotal throws for non-priceable", () => {
   assertThrows(
-    () => calculateItemSubtotal({ type: "destination" }),
+    () => calculateItemSubtotal({ type: "destination" } as LineItem),
     Error,
     "not priceable",
   );
@@ -548,7 +548,7 @@ Deno.test("calculateReplacementTotals skips items with null replacement", () => 
 Deno.test("calculateReplacementTotals skips non-priceable items", () => {
   const items: LineItem[] = [
     makeItem({ quantity: 1 }, { replacement: 500 }),
-    { type: "destination" },
+    { type: "destination", uid: "d1", name: "", path: [] },
   ];
   const result = calculateReplacementTotals(items, TAXES);
   assertEquals(result.subtotal, 500);
@@ -583,8 +583,8 @@ Deno.test("calculateReplacementTotals multi-tax on replacement", () => {
 
 Deno.test("getGroupPath finds destination and group", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "dest-1" },
-    { type: "group", name: "Camera" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "dest-1" },
+    { type: "group", uid: "g1", name: "Camera", path: ["d1"] },
     makeItem({ uid: "item-1" }),
   ];
   const result = getGroupPath(items, 2);
@@ -617,8 +617,8 @@ Deno.test("consolidateItems deduplicates by uid", () => {
 
 Deno.test("consolidateItems skips structural items", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1" },
-    { type: "group", name: "G1" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
+    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
     makeItem({ uid: "p1" }),
   ];
   const result = consolidateItems(items);
@@ -640,10 +640,10 @@ Deno.test("consolidateItems skips transaction fee items", () => {
 
 Deno.test("groupByDestination splits by destination dividers", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1", uid_collection: "d1" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1", uid_collection: "d1" },
     makeItem({ uid: "p1", type: "rental" }),
     makeItem({ uid: "p2", type: "sale" }),
-    { type: "destination", uid_delivery: "d2", uid_collection: "d2" },
+    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2", uid_collection: "d2" },
     makeItem({ uid: "p3", type: "rental" }),
   ];
   const result = groupByDestination(items, "fallback");
@@ -674,11 +674,11 @@ Deno.test("groupByDestination returns empty section for empty items", () => {
 
 Deno.test("getGroupItems collects destination children", () => {
   const items: LineItem[] = [
-    { type: "destination" },
-    { type: "group", name: "G1" },
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
     makeItem({ uid: "p1" }),
     makeItem({ uid: "p2" }),
-    { type: "destination" },
+    { type: "destination", uid: "d2", name: "", path: [] },
   ];
   const result = getGroupItems(items, 0);
   assertEquals(result.length, 2);
@@ -686,10 +686,10 @@ Deno.test("getGroupItems collects destination children", () => {
 
 Deno.test("getGroupItems collects group children", () => {
   const items: LineItem[] = [
-    { type: "group", name: "G1" },
+    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
     makeItem({ uid: "p1" }),
     makeItem({ uid: "p2" }),
-    { type: "group", name: "G2" },
+    { type: "group", uid: "g2", name: "G2", path: ["d1"] },
   ];
   const result = getGroupItems(items, 0);
   assertEquals(result.length, 2);
@@ -710,7 +710,7 @@ Deno.test("getGroupItems collects zero-priced components for product", () => {
 
 Deno.test("getGroupTotals returns count and pricing", () => {
   const items: LineItem[] = [
-    { type: "group", name: "G1" },
+    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
     makeItem({ uid: "p1" }),
     makeItem({ uid: "p2" }),
   ];
@@ -723,8 +723,8 @@ Deno.test("getGroupTotals returns count and pricing", () => {
 
 Deno.test("getGroupTotals returns zeros for empty group", () => {
   const items: LineItem[] = [
-    { type: "group", name: "G1" },
-    { type: "group", name: "G2" },
+    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
+    { type: "group", uid: "g2", name: "G2", path: ["d1"] },
   ];
   const result = getGroupTotals(items, 0, TAXES);
   assertEquals(result.count, 0);
@@ -737,11 +737,11 @@ Deno.test("getGroupTotals returns zeros for empty group", () => {
 
 Deno.test("buildPackingList returns expanded items with group context", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1", uid_collection: "d1" },
-    { type: "group", name: "Tables" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1", uid_collection: "d1" },
+    { type: "group", uid: "g1", name: "Tables", path: ["d1"] },
     makeItem({ uid: "p1", type: "rental", name: "Round Table" }),
     makeItem({ uid: "p2", type: "sale", name: "Tablecloth" }),
-    { type: "group", name: "Chairs" },
+    { type: "group", uid: "g2", name: "Chairs", path: ["d1"] },
     makeItem({ uid: "p3", type: "rental", name: "Folding Chair" }),
   ];
   const result = buildPackingList(items);
@@ -762,11 +762,11 @@ Deno.test("buildPackingList returns expanded items with group context", () => {
 
 Deno.test("buildPackingList excludes surcharges, fees, and structural items", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
     makeItem({ uid: "p1", type: "rental" }),
-    { type: "surcharge", uid: "s1", name: "Damage Waiver" },
-    { type: "transaction_fee", uid: "f1", name: "CC Fee" },
-    { type: "group", name: "G1" },
+    { type: "surcharge", uid: "s1", name: "Damage Waiver", path: [] },
+    { type: "transaction_fee", uid: "f1", name: "CC Fee", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
   ];
   const result = buildPackingList(items);
   assertEquals(result.length, 1);
@@ -775,10 +775,10 @@ Deno.test("buildPackingList excludes surcharges, fees, and structural items", ()
 
 Deno.test("buildPackingList scoped to destination", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1", uid_collection: "d1" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1", uid_collection: "d1" },
     makeItem({ uid: "p1", type: "rental" }),
     makeItem({ uid: "p2", type: "sale" }),
-    { type: "destination", uid_delivery: "d2", uid_collection: "d2" },
+    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2", uid_collection: "d2" },
     makeItem({ uid: "p3", type: "rental" }),
   ];
   const result = buildPackingList(items, false, "d2");
@@ -788,9 +788,9 @@ Deno.test("buildPackingList scoped to destination", () => {
 
 Deno.test("buildPackingList consolidated deduplicates by uid", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
     makeItem({ uid: "p1", type: "rental", quantity: 2 }),
-    { type: "destination", uid_delivery: "d2" },
+    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2" },
     makeItem({ uid: "p1", type: "rental", quantity: 3 }),
   ];
   const result = buildPackingList(items, true);
@@ -801,9 +801,9 @@ Deno.test("buildPackingList consolidated deduplicates by uid", () => {
 
 Deno.test("buildPackingList consolidated + destination scoped", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
     makeItem({ uid: "p1", type: "rental", quantity: 2 }),
-    { type: "destination", uid_delivery: "d2" },
+    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2" },
     makeItem({ uid: "p1", type: "rental", quantity: 3 }),
     makeItem({ uid: "p2", type: "sale", quantity: 1 }),
   ];
@@ -815,8 +815,8 @@ Deno.test("buildPackingList consolidated + destination scoped", () => {
 
 Deno.test("buildPackingList returns empty for no eligible items", () => {
   const items: LineItem[] = [
-    { type: "destination", uid_delivery: "d1" },
-    { type: "surcharge", uid: "s1" },
+    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
+    { type: "surcharge", uid: "s1", name: "Surcharge", path: [] },
   ];
   assertEquals(buildPackingList(items).length, 0);
   assertEquals(buildPackingList(items, true).length, 0);

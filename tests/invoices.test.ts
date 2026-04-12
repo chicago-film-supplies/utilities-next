@@ -22,6 +22,7 @@ const orderDivider: InvoiceItem = {
   type: "order",
   name: "Order #1001",
   uid_order: "order-1",
+  path: [],
 };
 
 const destItem: InvoiceItem = {
@@ -46,6 +47,7 @@ const lineItem1: InvoiceItem = {
     taxes: [],
     subtotal: 200,
     subtotal_discounted: 200,
+    total: 200,
   },
   path: ["order-div-1", "dest-1"],
   coa_revenue: "4100",
@@ -65,6 +67,7 @@ const lineItem2: InvoiceItem = {
     taxes: [],
     subtotal: 300,
     subtotal_discounted: 300,
+    total: 300,
   },
   path: ["order-div-1", "dest-1"],
   xero_id: "xero-123",
@@ -75,6 +78,7 @@ const orderDivider2: InvoiceItem = {
   type: "order",
   name: "Order #1002",
   uid_order: "order-2",
+  path: [],
 };
 
 const lineItem3: InvoiceItem = {
@@ -90,6 +94,7 @@ const lineItem3: InvoiceItem = {
     taxes: [],
     subtotal: 500,
     subtotal_discounted: 500,
+    total: 500,
   },
   path: ["order-div-2"],
 };
@@ -107,11 +112,11 @@ const multiOrderInvoiceItems: InvoiceItem[] = [
 
 Deno.test("flattenForXero removes destination, group, and order dividers", () => {
   const items: LineItem[] = [
-    { type: "order", uid: "o1", name: "Order" },
-    { type: "destination", uid: "d1", name: "Venue" },
-    { type: "group", uid: "g1", name: "Lighting" },
-    { type: "rental", uid: "i1", name: "Light", quantity: 1 },
-    { type: "sale", uid: "i2", name: "Tripod", quantity: 1 },
+    { type: "order", uid: "o1", name: "Order", path: [] },
+    { type: "destination", uid: "d1", name: "Venue", path: [] },
+    { type: "group", uid: "g1", name: "Lighting", path: [] },
+    { type: "rental", uid: "i1", name: "Light", quantity: 1, path: [] },
+    { type: "sale", uid: "i2", name: "Tripod", quantity: 1, path: [] },
   ];
   const result = flattenForXero(items);
   assertEquals(result.length, 2);
@@ -160,9 +165,9 @@ Deno.test("removeOrderScopedItems removes order-div-2 scope, keeps order-div-1",
 
 Deno.test("buildOrderScopedItems prepends order divider uid to path", () => {
   const orderItems: LineItem[] = [
-    { uid: "dest-1", type: "destination", name: "Venue" },
+    { uid: "dest-1", type: "destination", name: "Venue", path: [] },
     { uid: "item-1", type: "rental", name: "Light", path: ["dest-1"] },
-    { uid: "item-2", type: "rental", name: "Camera" },
+    { uid: "item-2", type: "rental", name: "Camera", path: [] },
   ];
   const result = buildOrderScopedItems(orderItems, "order-div-1");
   assertEquals(result[0].path, ["order-div-1"]);
@@ -174,12 +179,12 @@ Deno.test("buildOrderScopedItems prepends order divider uid to path", () => {
 
 Deno.test("carryForwardOverrides preserves coa_revenue and xero_id from existing items", () => {
   const rebuilt: InvoiceItem[] = [
-    { uid: "item-1", type: "rental", name: "Light Updated", quantity: 3 },
-    { uid: "item-new", type: "sale", name: "New Item", quantity: 1 },
+    { uid: "item-1", type: "rental", name: "Light Updated", quantity: 3, path: [] },
+    { uid: "item-new", type: "sale", name: "New Item", quantity: 1, path: [] },
   ];
   const existing: InvoiceItem[] = [
-    { uid: "item-1", type: "rental", name: "Light", coa_revenue: "4100", xero_id: "xero-1" },
-    { uid: "item-removed", type: "sale", name: "Gone", coa_revenue: "4200" },
+    { uid: "item-1", type: "rental", name: "Light", coa_revenue: "4100", xero_id: "xero-1", path: [] },
+    { uid: "item-removed", type: "sale", name: "Gone", coa_revenue: "4200", path: [] },
   ];
   const result = carryForwardOverrides(rebuilt, existing);
   assertEquals(result[0].name, "Light Updated"); // rebuilt field
@@ -193,9 +198,9 @@ Deno.test("carryForwardOverrides preserves coa_revenue and xero_id from existing
 
 Deno.test("syncOrderItems replaces scoped items and carries forward overrides", () => {
   const newOrderItems: LineItem[] = [
-    { uid: "dest-1", type: "destination", name: "Venue Renamed" },
+    { uid: "dest-1", type: "destination", name: "Venue Renamed", path: [] },
     { uid: "item-1", type: "rental", name: "Spot Light v2", quantity: 5, path: ["dest-1"] },
-    { uid: "item-new", type: "service", name: "Setup Fee", quantity: 1 },
+    { uid: "item-new", type: "service", name: "Setup Fee", quantity: 1, path: [] },
   ];
 
   const result = syncOrderItems(multiOrderInvoiceItems, newOrderItems, "order-div-1");
@@ -227,10 +232,10 @@ Deno.test("syncOrderItems replaces scoped items and carries forward overrides", 
 
 Deno.test("syncOrderItems preserves order when divider not found (appends)", () => {
   const items: InvoiceItem[] = [
-    { uid: "existing", type: "rental", name: "Existing Item", quantity: 1 },
+    { uid: "existing", type: "rental", name: "Existing Item", quantity: 1, path: [] },
   ];
   const orderItems: LineItem[] = [
-    { uid: "new-item", type: "sale", name: "New", quantity: 1 },
+    { uid: "new-item", type: "sale", name: "New", quantity: 1, path: [] },
   ];
   const result = syncOrderItems(items, orderItems, "unknown-divider");
   assertEquals(result.length, 2);
@@ -247,16 +252,16 @@ const TAXES: Tax[] = [
 
 Deno.test("calculateInvoiceTotals computes totals from billable items only", () => {
   const items: InvoiceItem[] = [
-    { uid: "order-div", type: "order", name: "Order #1" },
-    { uid: "dest", type: "destination", name: "Venue" },
-    { uid: "group", type: "group", name: "Lighting" },
+    { uid: "order-div", type: "order", name: "Order #1", path: [] },
+    { uid: "dest", type: "destination", name: "Venue", path: [] },
+    { uid: "group", type: "group", name: "Lighting", path: [] },
     {
-      uid: "item-1", type: "rental", name: "Spot Light", quantity: 2,
-      price: { base: 100, formula: "five_day_week" as const, chargeable_days: 5, discount: null, taxes: [], subtotal: 200, subtotal_discounted: 200 },
+      uid: "item-1", type: "rental", name: "Spot Light", quantity: 2, path: [],
+      price: { base: 100, formula: "five_day_week" as const, chargeable_days: 5, discount: null, taxes: [], subtotal: 200, subtotal_discounted: 200, total: 200 },
     },
     {
-      uid: "item-2", type: "sale", name: "Tripod", quantity: 1,
-      price: { base: 300, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 300, subtotal_discounted: 300 },
+      uid: "item-2", type: "sale", name: "Tripod", quantity: 1, path: [],
+      price: { base: 300, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 300, subtotal_discounted: 300, total: 300 },
     },
   ];
 
@@ -274,11 +279,11 @@ Deno.test("calculateInvoiceTotals computes totals from billable items only", () 
 Deno.test("calculateInvoiceTotals applies discount", () => {
   const items: InvoiceItem[] = [
     {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1,
+      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
       price: {
         base: 100, formula: "five_day_week" as const, chargeable_days: 5,
         discount: { type: "percent", rate: 10, amount: 10 },
-        taxes: [], subtotal: 100, subtotal_discounted: 90,
+        taxes: [], subtotal: 100, subtotal_discounted: 90, total: 90,
       },
     },
   ];
@@ -292,12 +297,12 @@ Deno.test("calculateInvoiceTotals applies discount", () => {
 Deno.test("calculateInvoiceTotals with taxes", () => {
   const items: InvoiceItem[] = [
     {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1,
+      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
       price: {
         base: 100, formula: "five_day_week" as const, chargeable_days: 5,
         discount: null,
         taxes: [{ uid: "chi-rental-tax", name: "Chicago Rental Tax", rate: 15, type: "percent", amount: 15 }],
-        subtotal: 100, subtotal_discounted: 100,
+        subtotal: 100, subtotal_discounted: 100, total: 115,
       },
     },
   ];
@@ -312,8 +317,8 @@ Deno.test("calculateInvoiceTotals with taxes", () => {
 Deno.test("calculateInvoiceTotals with payments reduces amount_due", () => {
   const items: InvoiceItem[] = [
     {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1,
-      price: { base: 1000, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 1000, subtotal_discounted: 1000 },
+      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
+      price: { base: 1000, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 1000, subtotal_discounted: 1000, total: 1000 },
     },
   ];
   const payments = [
@@ -340,11 +345,11 @@ Deno.test("calculateInvoiceTotals with empty items returns zeros", () => {
 Deno.test("calculateInvoiceTotals with transaction fee", () => {
   const items: InvoiceItem[] = [
     {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1,
-      price: { base: 100, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 100, subtotal_discounted: 100 },
+      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
+      price: { base: 100, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 100, subtotal_discounted: 100, total: 100 },
     },
     {
-      uid: "fee-1", type: "transaction_fee", name: "Credit Card Fee",
+      uid: "fee-1", type: "transaction_fee", name: "Credit Card Fee", path: [],
       price: { uid: "cc-fee", name: "Credit Card Fee", rate: 3, type: "percent", amount: 0 },
     },
   ];

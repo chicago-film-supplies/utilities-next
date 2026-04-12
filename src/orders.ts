@@ -32,8 +32,10 @@ import currency from "currency.js";
 import type {
   DiscountType,
   PriceModifierType,
-  PriceFormulaType,
   OrderDocTotalsType,
+  OrderDocItemPriceType,
+  ConsolidatedItemType,
+  GroupPathType,
   Tax as SchemaTax,
 } from "@cfs/schemas";
 
@@ -45,49 +47,66 @@ export type Discount = DiscountType;
 /** @see {@link PriceModifierType} from `@cfs/schemas` */
 export type PriceModifier = PriceModifierType;
 
-/**
- * Intermediate price representation used during price construction.
- * Differs from {@link OrderDocItemPriceType} in that `base` and `total`
- * are optional (not yet computed).
- */
-export interface PriceObject {
-  base?: number;
-  replacement?: number | null;
-  formula: PriceFormulaType;
-  chargeable_days: number | null;
-  discount: DiscountType | null;
-  taxes: PriceModifierType[];
-  subtotal: number;
-  subtotal_discounted: number;
-  total?: number;
-}
+/** @see {@link OrderDocItemPriceType} from `@cfs/schemas` */
+export type PriceObject = OrderDocItemPriceType;
 
 /** Subset of the full Tax document needed by utility functions. */
 export type Tax = Pick<SchemaTax, "uid" | "name" | "rate" | "type">;
 
-/** A single line item in an order (product, destination, group, surcharge, or fee). */
+/**
+ * A single line item in an order (product, destination, group, surcharge, or fee).
+ * Loose interface compatible with all OrderDocItemType members — utility functions
+ * use type guards (isPriceableItem, isTransactionFeeItem) before accessing
+ * member-specific fields.
+ */
 export interface LineItem {
-  uid?: string;
-  name?: string;
-  type?: string;
+  uid: string;
+  name: string;
+  type: string;
   quantity?: number;
   price?: PriceObject | PriceModifierType;
   stock_method?: string;
-  path?: string[];
+  path: string[];
   uid_delivery?: string | null;
   uid_collection?: string | null;
   zero_priced?: boolean | null;
+  description?: string;
+  order_number?: number;
+  uid_order?: string | null;
 }
+
+/** A pre-tax line item with a full price object (rental, sale, service, surcharge, replacement). */
+export interface PreTaxLineItem extends LineItem {
+  type: "rental" | "sale" | "service" | "surcharge" | "replacement";
+  quantity: number;
+  price: PriceObject;
+}
+
+/** A transaction fee line item with a PriceModifier price. */
+export interface TransactionFeeLineItem extends LineItem {
+  type: "transaction_fee";
+  quantity: number;
+  price: PriceModifierType;
+}
+
+/** Any item that has pricing — pre-tax or transaction fee. */
+export type PriceableLineItem = PreTaxLineItem | TransactionFeeLineItem;
 
 /** @see {@link OrderDocTotalsType} from `@cfs/schemas` */
 export type OrderTotals = OrderDocTotalsType;
+
+/** @see {@link ConsolidatedItemType} from `@cfs/schemas` */
+export type ConsolidatedItem = ConsolidatedItemType;
+
+/** @see {@link GroupPathType} from `@cfs/schemas` */
+export type GroupPath = GroupPathType;
 
 // ── Type guards ──────────────────────────────────────────────────
 
 /**
  * Determine whether a line item is priceable (has a price object, not a structural item).
  */
-export function isPriceableItem(item: LineItem): boolean {
+export function isPriceableItem(item: LineItem): item is PriceableLineItem {
   if (!item || typeof item !== "object") return false;
   if (item.type === "destination" || item.type === "group") return false;
   if (!item.price || typeof item.price !== "object") return false;
@@ -97,16 +116,22 @@ export function isPriceableItem(item: LineItem): boolean {
 /**
  * Determine whether a line item is a transaction fee.
  */
-export function isTransactionFeeItem(item: LineItem): boolean {
-  return item?.type === "transaction_fee";
+export function isTransactionFeeItem(item: LineItem): item is TransactionFeeLineItem {
+  if (!item || typeof item !== "object") return false;
+  if (item.type !== "transaction_fee") return false;
+  if (!item.price || typeof item.price !== "object") return false;
+  return true;
 }
 
 /**
  * Determine whether a line item participates in subtotal/discount/tax calculations.
- * Returns true for priceable items that are not transaction fees.
+ * Standalone predicate (not composed) because TS doesn't support negated predicates.
  */
-export function isPreTaxItem(item: LineItem): boolean {
-  return isPriceableItem(item) && !isTransactionFeeItem(item);
+export function isPreTaxItem(item: LineItem): item is PreTaxLineItem {
+  if (!item || typeof item !== "object") return false;
+  if (item.type === "destination" || item.type === "group" || item.type === "transaction_fee") return false;
+  if (!item.price || typeof item.price !== "object") return false;
+  return true;
 }
 
 // ── Days factor ──────────────────────────────────────────────────
@@ -136,9 +161,8 @@ export function calculateItemSubtotal(
     );
   }
 
-  const price = item.price as PriceObject;
-  const quantity = item.quantity || 0;
-  const { base = 0, formula, chargeable_days = null, discount } = price;
+  const { base = 0, formula, chargeable_days = null, discount } = item.price;
+  const quantity = item.quantity;
 
   const daysFactor = getDaysFactor(formula, chargeable_days);
   const pricingFactor = Math.max(daysFactor, 1);
@@ -186,11 +210,10 @@ export function calculateItemTax(
     );
   }
 
-  const price = item.price as PriceObject;
   const { subtotal_discounted } = calculateItemSubtotal(item);
-  const quantity = item.quantity || 0;
+  const quantity = item.quantity;
 
-  return price.taxes.map((itemTax) => {
+  return item.price.taxes.map((itemTax) => {
     const taxDoc = taxes.find((t) => t.uid === itemTax.uid);
     if (!taxDoc) {
       throw new Error("Unknown tax uid: " + itemTax.uid);
@@ -221,8 +244,13 @@ export function calculateItemPrice(
   item: LineItem,
   taxes: Tax[],
 ): { subtotal: number; subtotal_discounted: number; discount: Discount | null; taxes: PriceModifier[]; total: number } {
+  if (!isPreTaxItem(item)) {
+    throw new Error(
+      "Item is not priceable: missing price object or is a destination/group/transaction_fee",
+    );
+  }
+
   const { subtotal, subtotal_discounted } = calculateItemSubtotal(item);
-  const price = item.price as PriceObject;
   const itemTaxes = calculateItemTax(item, taxes);
 
   let taxSum = currency(0);
@@ -231,10 +259,10 @@ export function calculateItemPrice(
   }
 
   let discount: Discount | null = null;
-  if (price.discount) {
+  if (item.price.discount) {
     discount = {
-      rate: price.discount.rate,
-      type: price.discount.type,
+      rate: item.price.discount.rate,
+      type: item.price.discount.type,
       amount: currency(subtotal).subtract(subtotal_discounted).value,
     };
   }
@@ -263,7 +291,7 @@ export function calculateItemTotal(
   }
 
   if (isTransactionFeeItem(item)) {
-    return (item.price as PriceModifier).amount;
+    return item.price.amount;
   }
 
   const { total } = calculateItemPrice(item, taxes);
@@ -328,15 +356,14 @@ export function getTransactionFeeTotals(items: LineItem[]): PriceModifier[] {
   const totals: Record<string, { uid: string; rate: number; type: "percent" | "flat"; amount: currency }> = {};
 
   for (const item of items) {
-    if (!isTransactionFeeItem(item) || !isPriceableItem(item)) continue;
+    if (!isTransactionFeeItem(item)) continue;
 
-    const fee = item.price as PriceModifier;
-    if (fee.amount === 0) continue;
+    if (item.price.amount === 0) continue;
 
-    if (!totals[fee.name]) {
-      totals[fee.name] = { uid: fee.uid, rate: fee.rate, type: fee.type, amount: currency(0) };
+    if (!totals[item.price.name]) {
+      totals[item.price.name] = { uid: item.price.uid, rate: item.price.rate, type: item.price.type, amount: currency(0) };
     }
-    totals[fee.name].amount = totals[fee.name].amount.add(fee.amount);
+    totals[item.price.name].amount = totals[item.price.name].amount.add(item.price.amount);
   }
 
   return Object.entries(totals).map(([name, { uid, rate, type, amount }]) => ({
@@ -378,19 +405,18 @@ export function calculateOrderTotals(
   // Pass 2: compute transaction fee amounts
   const feeItems: LineItem[] = [];
   for (const item of items) {
-    if (!isTransactionFeeItem(item) || !isPriceableItem(item)) continue;
+    if (!isTransactionFeeItem(item)) continue;
 
-    const fee = item.price as PriceModifier;
     let amount: number;
-    if (fee.type === "percent") {
-      amount = currency(subtotal_discounted).multiply(fee.rate / 100).value;
+    if (item.price.type === "percent") {
+      amount = currency(subtotal_discounted).multiply(item.price.rate / 100).value;
     } else {
-      amount = currency(fee.rate).multiply(item.quantity || 0).value;
+      amount = currency(item.price.rate).multiply(item.quantity).value;
     }
 
     feeItems.push({
       ...item,
-      price: { ...fee, amount },
+      price: { ...item.price, amount },
     });
   }
 
@@ -423,7 +449,7 @@ export function orderHasRentals(items: LineItem[]): boolean {
 export function orderHasDiscount(items: LineItem[]): boolean {
   if (!Array.isArray(items)) throw new Error("items must be an array");
   return items.some((item) =>
-    isPreTaxItem(item) && (item.price as PriceObject).discount !== null
+    isPreTaxItem(item) && item.price.discount !== null
   );
 }
 
@@ -431,7 +457,7 @@ export function orderHasDiscount(items: LineItem[]): boolean {
 export function orderHasTax(items: LineItem[]): boolean {
   if (!Array.isArray(items)) throw new Error("items must be an array");
   return items.some((item) =>
-    isPreTaxItem(item) && (item.price as PriceObject).taxes.length > 0
+    isPreTaxItem(item) && item.price.taxes.length > 0
   );
 }
 
@@ -465,14 +491,13 @@ export function calculateReplacementTotals(
   for (const item of items) {
     if (!isPreTaxItem(item)) continue;
 
-    const price = item.price as PriceObject;
-    if (price.replacement == null) continue;
+    if (item.price.replacement == null) continue;
 
-    const quantity = item.quantity || 0;
-    const itemReplacementSubtotal = currency(price.replacement).multiply(quantity);
+    const quantity = item.quantity;
+    const itemReplacementSubtotal = currency(item.price.replacement).multiply(quantity);
     subtotal = subtotal.add(itemReplacementSubtotal);
 
-    for (const itemTax of price.taxes) {
+    for (const itemTax of item.price.taxes) {
       const taxDoc = taxes.find((t) => t.uid === itemTax.uid);
       if (!taxDoc) continue;
 
@@ -500,13 +525,6 @@ const PACKING_LIST_ITEM_TYPES = new Set(["rental", "sale"]);
 const DELIVERY_TYPES = new Set(["rental", "sale"]);
 const COLLECTION_TYPES = new Set(["rental"]);
 
-/** Destination, group, and parent-product context for a line item. */
-export interface GroupPath {
-  destination: string | null;
-  group: string | null;
-  product: string | null;
-}
-
 /**
  * Walk backwards from `index` to determine which destination and group
  * an item belongs to.
@@ -516,7 +534,7 @@ export function getGroupPath(items: LineItem[], index: number): GroupPath {
   const result: GroupPath = {
     destination: null,
     group: null,
-    product: item?.path?.at(-1) ?? null,
+    product: item.path.at(-1) ?? null,
   };
 
   for (let i = index - 1; i >= 0; i--) {
@@ -531,17 +549,6 @@ export function getGroupPath(items: LineItem[], index: number): GroupPath {
   }
 
   return result;
-}
-
-/** A deduplicated line item with summed quantities and prices. */
-export interface ConsolidatedItem {
-  uid: string;
-  name: string;
-  type: string;
-  quantity: number;
-  total_price: number;
-  unit_price: number;
-  stock_method: string;
 }
 
 /**
@@ -565,7 +572,7 @@ export function consolidateItems(lineItems: LineItem[]): ConsolidatedItem[] {
   > = {};
 
   for (const item of lineItems) {
-    if (NON_PRODUCT_TYPES.has(item.type!)) continue;
+    if (NON_PRODUCT_TYPES.has(item.type)) continue;
     if (!item.uid) continue;
 
     const total = item.price && "total" in item.price ? (item.price.total || 0) : 0;
@@ -649,10 +656,10 @@ export function groupByDestination(
 
     current.items.push(item);
 
-    if (DELIVERY_TYPES.has(item.type!) && item.uid) {
+    if (DELIVERY_TYPES.has(item.type) && item.uid) {
       current.packing_list_delivery.push(item);
     }
-    if (COLLECTION_TYPES.has(item.type!) && item.uid) {
+    if (COLLECTION_TYPES.has(item.type) && item.uid) {
       current.packing_list_collection.push(item);
     }
   }
@@ -700,7 +707,7 @@ export function getGroupItems(items: LineItem[], index: number): LineItem[] {
   }
 
   return items.filter(
-    (i) => i.path?.at(-1) === item.uid && i.zero_priced === true,
+    (i) => i.path.at(-1) === item.uid && i.zero_priced === true,
   );
 }
 
@@ -744,7 +751,7 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
     prevSize = descendantUids.size;
     for (let i = 0; i < items.length; i++) {
       if (indexSet.has(i)) continue;
-      const parentUid = items[i].path?.at(-1);
+      const parentUid = items[i].path.at(-1);
       if (parentUid && descendantUids.has(parentUid)) {
         indexSet.add(i);
         if (items[i].uid) descendantUids.add(items[i].uid!);
@@ -827,7 +834,7 @@ export function buildPackingList(
 
   // Filter to packing-list-eligible items
   const filtered = scoped.filter(
-    (item) => item.uid && PACKING_LIST_ITEM_TYPES.has(item.type!),
+    (item) => item.uid && PACKING_LIST_ITEM_TYPES.has(item.type),
   );
 
   if (consolidated) {
@@ -847,7 +854,7 @@ export function buildPackingList(
       currentGroup = null;
       continue;
     }
-    if (!item.uid || !PACKING_LIST_ITEM_TYPES.has(item.type!)) continue;
+    if (!item.uid || !PACKING_LIST_ITEM_TYPES.has(item.type)) continue;
 
     result.push({
       uid: item.uid,
