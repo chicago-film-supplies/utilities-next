@@ -141,10 +141,11 @@ export function calculateItemSubtotal(
   const { base = 0, formula, chargeable_days = null, discount } = price;
 
   const daysFactor = getDaysFactor(formula, chargeable_days);
+  const pricingFactor = Math.max(daysFactor, 1);
 
   const subtotal = currency(base)
     .multiply(quantity)
-    .multiply(daysFactor);
+    .multiply(pricingFactor);
 
   if (!discount) {
     return { subtotal: subtotal.value, subtotal_discounted: subtotal.value };
@@ -156,7 +157,7 @@ export function calculateItemSubtotal(
   } else {
     const discountAmount = currency(discount.rate)
       .multiply(quantity)
-      .multiply(daysFactor);
+      .multiply(pricingFactor);
     subtotal_discounted = subtotal.subtract(discountAmount);
   }
 

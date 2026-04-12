@@ -137,10 +137,10 @@ Deno.test("calculateItemSubtotal five_day_week 2 weeks", () => {
   assertEquals(result.subtotal_discounted, 200);
 });
 
-Deno.test("calculateItemSubtotal five_day_week 3 days", () => {
+Deno.test("calculateItemSubtotal five_day_week 3 days (min 1 week)", () => {
   const result = calculateItemSubtotal(makeItem({}, { chargeable_days: 3 }));
-  assertEquals(result.subtotal, 60);
-  assertEquals(result.subtotal_discounted, 60);
+  assertEquals(result.subtotal, 100);
+  assertEquals(result.subtotal_discounted, 100);
 });
 
 Deno.test("calculateItemSubtotal with percent discount", () => {
