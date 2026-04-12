@@ -27,7 +27,21 @@ export {
   type Tax,
 } from "./orders.ts";
 
-import type { LineItem } from "./orders.ts";
+import currency from "currency.js";
+import type { InvoiceDocItemPrice, PriceModifierType } from "@cfs/schemas";
+import {
+  calculateItemSubtotal,
+  getTotalDiscount,
+  getTaxTotals,
+  getTransactionFeeTotals,
+  isPriceableItem,
+  isPreTaxItem,
+  isTransactionFeeItem,
+  type LineItem,
+  type PriceModifier,
+  type PriceObject,
+  type Tax,
+} from "./orders.ts";
 
 // ── Structural helpers ──────────────────────────────────────────
 
@@ -42,20 +56,182 @@ export function flattenForXero(items: LineItem[]): LineItem[] {
   return items.filter((item) => !STRUCTURAL_TYPES.has(item.type ?? ""));
 }
 
-// ── Order-scoped item sync ──────────────────────────────────────
+// ── Invoice item type ──────────────────────────────────────────
 
 /**
- * An invoice item with optional order-scoping fields.
- * Extends LineItem with invoice-specific properties that should be
- * carried forward during sync (coa_revenue, tracking_category, xero_id).
+ * An invoice item with optional order-scoping and invoice-specific fields.
+ * Extends LineItem with properties that should be carried forward during sync
+ * and fields needed for Xero mapping.
+ *
+ * `price` accepts both the utility's intermediate PriceObject and the full
+ * InvoiceDocItemPrice from schemas to avoid type drift.
  */
 export interface InvoiceItem extends LineItem {
   uid_order?: string | null;
+  description?: string;
+  price?: PriceObject | PriceModifierType | InvoiceDocItemPrice;
   coa_revenue?: string | null;
   tracking_category?: string | null;
   xero_id?: string | null;
   xero_tracking_option_id?: string | null;
+  crms_id?: number | string | null;
 }
+
+// ── Invoice totals ──────────────────────────────────────────────
+
+/** Invoice-level totals including payment tracking. */
+export interface InvoiceTotals {
+  discount_amount: number;
+  subtotal: number;
+  subtotal_discounted: number;
+  taxes: PriceModifier[];
+  transaction_fees: PriceModifier[];
+  total: number;
+  amount_paid: number;
+  amount_due: number;
+}
+
+/**
+ * Calculate aggregated pricing totals for an invoice.
+ *
+ * Composes from the same atomic building blocks as orders (calculateItemSubtotal,
+ * getTaxTotals, etc.) but assembled independently — shared per-item math,
+ * independent aggregation. This avoids business logic drift if invoices need
+ * different totals logic in the future (credit notes, partial billing, etc.).
+ *
+ * @param items - Full invoice items array (structural items are filtered out)
+ * @param taxes - Tax definitions for tax calculation
+ * @param payments - Optional payments array for amount_paid/amount_due
+ */
+export function calculateInvoiceTotals(
+  items: InvoiceItem[],
+  taxes: Tax[],
+  payments?: { amount: number; status: string }[],
+): InvoiceTotals {
+  const billable = flattenForXero(items);
+
+  // Pass 1: pre-tax items — subtotals, discount, taxes
+  let subtotal = currency(0);
+  let subtotal_discounted = currency(0);
+
+  for (const item of billable) {
+    if (!isPreTaxItem(item)) continue;
+    const result = calculateItemSubtotal(item);
+    subtotal = subtotal.add(result.subtotal);
+    subtotal_discounted = subtotal_discounted.add(result.subtotal_discounted);
+  }
+
+  const discount_amount = getTotalDiscount(billable);
+  const taxTotals = getTaxTotals(billable, taxes);
+
+  let taxSum = currency(0);
+  for (const entry of taxTotals) {
+    taxSum = taxSum.add(entry.amount);
+  }
+
+  // Pass 2: transaction fees — computed from subtotal_discounted
+  const feeItems: LineItem[] = [];
+  for (const item of billable) {
+    if (!isTransactionFeeItem(item) || !isPriceableItem(item)) continue;
+
+    const fee = item.price as PriceModifier;
+    let amount: number;
+    if (fee.type === "percent") {
+      amount = currency(subtotal_discounted).multiply(fee.rate / 100).value;
+    } else {
+      amount = currency(fee.rate).multiply(item.quantity || 0).value;
+    }
+
+    feeItems.push({ ...item, price: { ...fee, amount } });
+  }
+
+  const transaction_fees = getTransactionFeeTotals(feeItems);
+
+  let feeSum = currency(0);
+  for (const entry of transaction_fees) {
+    feeSum = feeSum.add(entry.amount);
+  }
+
+  const total = currency(subtotal_discounted).add(taxSum).add(feeSum).value;
+
+  // Payment accounting
+  const { amount_paid, amount_due } = recomputePaymentTotals(total, payments ?? []);
+
+  return {
+    discount_amount,
+    subtotal: subtotal.value,
+    subtotal_discounted: subtotal_discounted.value,
+    taxes: taxTotals,
+    transaction_fees,
+    total,
+    amount_paid,
+    amount_due,
+  };
+}
+
+// ── Payment helpers ─────────────────────────────────────────────
+
+/**
+ * Derive invoice status from payment amounts.
+ * Pure function — does not mutate the invoice.
+ *
+ * @param currentStatus - Current invoice status
+ * @param amountPaid - Total amount paid
+ * @param amountDue - Total amount still due
+ * @returns The derived status
+ */
+export function derivePaymentStatus(
+  currentStatus: string,
+  amountPaid: number,
+  amountDue: number,
+): string {
+  if (currentStatus === "draft" || currentStatus === "void") return currentStatus;
+  if (currency(amountDue).value <= 0) return "paid";
+  if (currency(amountPaid).value > 0) return "part_paid";
+  return "issued";
+}
+
+/**
+ * Compute amount_paid and amount_due from a payments array.
+ * Pure function — returns values instead of mutating.
+ *
+ * @param total - Invoice total amount
+ * @param payments - Payments array with amount and status fields
+ * @returns Computed amount_paid and amount_due
+ */
+export function recomputePaymentTotals(
+  total: number,
+  payments: { amount: number; status: string }[],
+): { amount_paid: number; amount_due: number } {
+  let amountPaid = currency(0);
+  for (const p of payments) {
+    if (p.status === "active") {
+      amountPaid = amountPaid.add(p.amount);
+    }
+  }
+  return {
+    amount_paid: amountPaid.value,
+    amount_due: currency(total).subtract(amountPaid).value,
+  };
+}
+
+// ── Xero helpers ────────────────────────────────────────────────
+
+/**
+ * Compute the Xero unit amount from subtotal and quantity.
+ * Bakes duration (chargeable_days × formula) into per-unit price,
+ * since Xero has no concept of rental duration.
+ *
+ * @param subtotal - Pre-discount subtotal (base × days × formula × quantity)
+ * @param quantity - Item quantity
+ * @returns Per-unit amount for Xero, or 0 if quantity is 0
+ */
+export function getXeroUnitAmount(subtotal: number, quantity: number): number {
+  if (!quantity) return 0;
+  return currency(subtotal).divide(quantity).value;
+}
+
+// ── Order-scoped item sync ──────────────────────────────────────
 
 /**
  * Get all invoice items scoped to a specific order divider.
