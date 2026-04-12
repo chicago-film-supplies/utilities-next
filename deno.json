@@ -5,6 +5,7 @@
   "description": "Shared date and order utility functions for CFS applications.",
   "exports": {
     "./dates": "./src/dates.ts",
+    "./invoices": "./src/invoices.ts",
     "./orders": "./src/orders.ts",
     "./products": "./src/products.ts"
   },
@@ -12,7 +13,7 @@
     "setup": "deno install && git config core.hooksPath .githooks",
     "test": "deno test tests/",
     "lint": "deno lint",
-    "check": "deno check src/dates.ts src/orders.ts src/products.ts"
+    "check": "deno check src/dates.ts src/invoices.ts src/orders.ts src/products.ts"
   },
   "imports": {
     "date-fns": "npm:date-fns@^4",
