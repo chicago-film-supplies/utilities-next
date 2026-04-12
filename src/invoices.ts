@@ -231,6 +231,194 @@ export function getXeroUnitAmount(subtotal: number, quantity: number): number {
   return currency(subtotal).divide(quantity).value;
 }
 
+// ── Selective sync helpers ──────────────────────────────────────
+
+/** Invoice-only item fields excluded from override comparison. */
+const INVOICE_ONLY_ITEM_FIELDS = new Set([
+  "coa_revenue", "tracking_category", "xero_id", "xero_tracking_option_id",
+]);
+
+/**
+ * Return the intersection of two key arrays, minus any keys in the exclude set.
+ * Used to derive comparable fields from two schema shapes without hardcoding.
+ *
+ * @param keysA - Field names from schema A
+ * @param keysB - Field names from schema B
+ * @param excludes - Field names to exclude from the result
+ * @returns Shared field names, excluding the exclude set
+ */
+export function getSharedFields(keysA: string[], keysB: string[], excludes: string[]): string[] {
+  const setB = new Set(keysB);
+  const excl = new Set(excludes);
+  return keysA.filter((k) => setB.has(k) && !excl.has(k));
+}
+
+/**
+ * Stable key for path-based item matching.
+ * Joins path segments with "/" to produce a unique positional identifier.
+ */
+function itemPathKey(path: string[] | undefined): string {
+  return (path ?? []).join("/");
+}
+
+/**
+ * Strip the order divider uid prefix from an invoice item's path.
+ * Invoice items under an order divider have path = [orderDividerUid, ...originalPath].
+ */
+function stripOrderPrefix(path: string[] | undefined, orderDividerUid: string): string[] {
+  if (!path || path.length === 0) return [];
+  if (path[0] === orderDividerUid) return path.slice(1);
+  return path;
+}
+
+/**
+ * Pick only invoice-only override fields from an invoice item.
+ * Used to carry forward overrides when replacing an item with updated order data.
+ */
+function pickInvoiceOnlyFields(item: InvoiceItem): Partial<InvoiceItem> {
+  const result: Partial<InvoiceItem> = {};
+  if (item.coa_revenue !== undefined) result.coa_revenue = item.coa_revenue;
+  if (item.tracking_category !== undefined) result.tracking_category = item.tracking_category;
+  if (item.xero_id !== undefined) result.xero_id = item.xero_id;
+  if (item.xero_tracking_option_id !== undefined) result.xero_tracking_option_id = item.xero_tracking_option_id;
+  return result;
+}
+
+/**
+ * Compare a previous order item to a current invoice item to detect overrides.
+ * Returns true if the invoice item is "synced" (matches the order item on all
+ * non-invoice-only fields), false if it has been manually overridden.
+ *
+ * The comparison strips the order divider prefix from the invoice item's path
+ * and ignores invoice-only fields (coa_revenue, tracking_category, xero_id,
+ * xero_tracking_option_id).
+ *
+ * @param prevOrderItem - The order item from the previous version of the order
+ * @param invoiceItem - The current invoice item (with order-scoped path)
+ * @param orderDividerUid - The uid of the order divider (for path prefix stripping)
+ * @returns true if the item is synced (not overridden), false if overridden
+ */
+export function isItemSynced(
+  prevOrderItem: LineItem,
+  invoiceItem: InvoiceItem,
+  orderDividerUid: string,
+): boolean {
+  // Build a normalized version of the invoice item for comparison:
+  // strip invoice-only fields and order divider path prefix
+  const normalizedInvoice: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(invoiceItem)) {
+    if (INVOICE_ONLY_ITEM_FIELDS.has(key)) continue;
+    if (key === "path") {
+      normalizedInvoice[key] = stripOrderPrefix(value as string[], orderDividerUid);
+    } else {
+      normalizedInvoice[key] = value;
+    }
+  }
+
+  // Compare all fields from the order item against the normalized invoice item
+  const orderKeys = Object.keys(prevOrderItem);
+  const invoiceKeys = Object.keys(normalizedInvoice);
+
+  // Must have the same set of non-invoice-only keys
+  const orderKeySet = new Set(orderKeys);
+  const invoiceKeySet = new Set(invoiceKeys);
+  for (const k of orderKeySet) {
+    if (!invoiceKeySet.has(k)) return false;
+  }
+  for (const k of invoiceKeySet) {
+    if (!orderKeySet.has(k)) return false;
+  }
+
+  for (const key of orderKeys) {
+    const a = (prevOrderItem as Record<string, unknown>)[key];
+    const b = normalizedInvoice[key];
+    if (JSON.stringify(a) !== JSON.stringify(b)) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Selectively sync order items into an invoice, respecting invoice-side overrides.
+ *
+ * Items are matched by **path** (not uid), since the same product can appear at
+ * multiple positions in the items array. For each item:
+ *
+ * - **Synced** (prev order matches current invoice, minus invoice-only fields):
+ *   replaced with the new order item, carrying forward invoice-only overrides
+ * - **Overridden** (invoice item differs from prev order): left unchanged
+ * - **New** (in new order, not in prev): added under the order divider
+ * - **Removed** (in prev order, not in new): removed only if synced, kept if overridden
+ *
+ * @param prevOrderItems - Items from the previous version of the order
+ * @param newOrderItems - Items from the new version of the order
+ * @param currentInvoiceItems - Items scoped to this order in the current invoice (without order divider)
+ * @param orderDividerUid - The uid of the order divider in the invoice
+ * @returns Updated invoice items (scoped under the order divider, ready for insertion)
+ */
+export function syncOrderToInvoiceSelective(
+  prevOrderItems: LineItem[],
+  newOrderItems: LineItem[],
+  currentInvoiceItems: InvoiceItem[],
+  orderDividerUid: string,
+): InvoiceItem[] {
+  // Index prev order items by path key
+  const prevByPath = new Map<string, LineItem>();
+  for (const item of prevOrderItems) {
+    prevByPath.set(itemPathKey(item.path), item);
+  }
+
+  // Index current invoice items by order-relative path key
+  const invoiceByPath = new Map<string, InvoiceItem>();
+  for (const item of currentInvoiceItems) {
+    const relPath = stripOrderPrefix(item.path, orderDividerUid);
+    invoiceByPath.set(itemPathKey(relPath), item);
+  }
+
+  const result: InvoiceItem[] = [];
+  const processedInvoicePaths = new Set<string>();
+
+  // Process new order items in order
+  for (const newItem of newOrderItems) {
+    const pathKey = itemPathKey(newItem.path);
+    const prevItem = prevByPath.get(pathKey);
+    const invoiceItem = invoiceByPath.get(pathKey);
+    processedInvoicePaths.add(pathKey);
+
+    if (!invoiceItem) {
+      // New item — add it scoped under the order divider
+      result.push({
+        ...newItem,
+        path: newItem.path ? [orderDividerUid, ...newItem.path] : [orderDividerUid],
+      });
+    } else if (prevItem && isItemSynced(prevItem, invoiceItem, orderDividerUid)) {
+      // Not overridden — update with new order item, carry forward invoice-only fields
+      result.push({
+        ...newItem,
+        path: newItem.path ? [orderDividerUid, ...newItem.path] : [orderDividerUid],
+        ...pickInvoiceOnlyFields(invoiceItem),
+      });
+    } else {
+      // Overridden or no prev item — keep invoice item unchanged
+      result.push(invoiceItem);
+    }
+  }
+
+  // Handle removed items (in invoice but not in new order)
+  for (const [pathKey, invoiceItem] of invoiceByPath) {
+    if (processedInvoicePaths.has(pathKey)) continue;
+
+    const prevItem = prevByPath.get(pathKey);
+    if (prevItem && !isItemSynced(prevItem, invoiceItem, orderDividerUid)) {
+      // Overridden — keep it even though it's been removed from the order
+      result.push(invoiceItem);
+    }
+    // Else: synced and removed from order — drop it
+  }
+
+  return result;
+}
+
 // ── Order-scoped item sync ──────────────────────────────────────
 
 /**
