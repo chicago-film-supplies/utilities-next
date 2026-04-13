@@ -33,7 +33,7 @@ export {
 } from "./orders.ts";
 
 import currency from "currency.js";
-import type { InvoiceDocItemPrice, InvoiceDocTotals, PriceModifierType } from "@cfs/schemas";
+import type { COARevenueType, InvoiceDocItemPrice, InvoiceDocTotals, PriceModifierType } from "@cfs/schemas";
 import {
   calculateItemSubtotal,
   getTotalDiscount,
@@ -73,7 +73,7 @@ export interface InvoiceItem extends LineItem {
   uid_order?: string | null;
   description?: string;
   price?: PriceObject | PriceModifierType | InvoiceDocItemPrice;
-  coa_revenue?: string | null;
+  coa_revenue?: COARevenueType | null;
   tracking_category?: string | null;
   xero_id?: string | null;
   xero_tracking_option_id?: string | null;

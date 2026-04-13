@@ -71,7 +71,7 @@ const lineItem1: InvoiceItem = {
     total: 200,
   },
   path: ["order-div-1", "dest-1"],
-  coa_revenue: "4100",
+  coa_revenue: 4100,
   tracking_category: "rentals",
 } as InvoiceItem;
 
@@ -201,13 +201,13 @@ Deno.test("carryForwardOverrides preserves coa_revenue and xero_id from existing
     { uid: "item-new", type: "sale", name: "New Item", quantity: 1, path: [] },
   ];
   const existing: InvoiceItem[] = [
-    { uid: "item-1", type: "rental", name: "Light", coa_revenue: "4100", xero_id: "xero-1", path: [] },
-    { uid: "item-removed", type: "sale", name: "Gone", coa_revenue: "4200", path: [] },
+    { uid: "item-1", type: "rental", name: "Light", coa_revenue: 4100, xero_id: "xero-1", path: [] },
+    { uid: "item-removed", type: "sale", name: "Gone", coa_revenue: 4200, path: [] },
   ];
   const result = carryForwardOverrides(rebuilt, existing);
   assertEquals(result[0].name, "Light Updated"); // rebuilt field
   assertEquals(result[0].quantity, 3); // rebuilt field
-  assertEquals(result[0].coa_revenue, "4100"); // carried forward
+  assertEquals(result[0].coa_revenue, 4100); // carried forward
   assertEquals(result[0].xero_id, "xero-1"); // carried forward
   assertEquals(result[1].coa_revenue, undefined); // new item, no override
 });
@@ -234,7 +234,7 @@ Deno.test("syncOrderItems replaces scoped items and carries forward overrides", 
   assertEquals(result[2].path, ["order-div-1", "dest-1"]);
   assertEquals(result[2].name, "Spot Light v2");
   assertEquals(result[2].quantity, 5);
-  assertEquals((result[2] as InvoiceItem).coa_revenue, "4100"); // carried forward
+  assertEquals((result[2] as InvoiceItem).coa_revenue, 4100); // carried forward
 
   assertEquals(result[3].path, ["order-div-1"]);
   assertEquals(result[3].name, "Setup Fee");
