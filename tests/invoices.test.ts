@@ -1,4 +1,5 @@
 import { assertEquals } from "@std/assert";
+import { getInitialValues, InvoiceDocLineItemSchema, InvoiceDocOrderItem } from "@cfs/schemas";
 import {
   buildOrderScopedItems,
   calculateInvoiceTotals,
@@ -15,15 +16,36 @@ import {
   syncOrderItems,
 } from "../src/invoices.ts";
 
+// ── Schema bases ────────────────────────────────────────────────
+
+const lineItemBase = getInitialValues(InvoiceDocLineItemSchema) as Record<string, unknown>;
+const priceBase = (lineItemBase as { price: Record<string, unknown> }).price;
+const orderDividerBase = getInitialValues(InvoiceDocOrderItem) as Record<string, unknown>;
+
+function makeItem(
+  overrides: Partial<InvoiceItem> = {},
+  priceOverrides: Record<string, unknown> = {},
+): InvoiceItem {
+  return {
+    ...lineItemBase,
+    name: "Test Item",
+    quantity: 1,
+    ...overrides,
+    price: {
+      ...priceBase,
+      ...priceOverrides,
+    },
+  } as unknown as InvoiceItem;
+}
+
 // ── Test data ───────────────────────────────────────────────────
 
 const orderDivider: InvoiceItem = {
+  ...orderDividerBase,
   uid: "order-div-1",
-  type: "order",
   name: "Order #1001",
   uid_order: "order-1",
-  path: [],
-};
+} as InvoiceItem;
 
 const destItem: InvoiceItem = {
   uid: "dest-1",
@@ -35,16 +57,15 @@ const destItem: InvoiceItem = {
 };
 
 const lineItem1: InvoiceItem = {
+  ...lineItemBase,
   uid: "item-1",
   type: "rental",
   name: "Spot Light",
   quantity: 2,
   price: {
+    ...priceBase,
     base: 100,
-    formula: "five_day_week" as const,
     chargeable_days: 5,
-    discount: null,
-    taxes: [],
     subtotal: 200,
     subtotal_discounted: 200,
     total: 200,
@@ -52,52 +73,49 @@ const lineItem1: InvoiceItem = {
   path: ["order-div-1", "dest-1"],
   coa_revenue: "4100",
   tracking_category: "rentals",
-};
+} as InvoiceItem;
 
 const lineItem2: InvoiceItem = {
+  ...lineItemBase,
   uid: "item-2",
   type: "sale",
   name: "Tripod",
   quantity: 1,
   price: {
+    ...priceBase,
     base: 300,
-    formula: "fixed" as const,
-    chargeable_days: null,
-    discount: null,
-    taxes: [],
+    formula: "fixed",
     subtotal: 300,
     subtotal_discounted: 300,
     total: 300,
   },
   path: ["order-div-1", "dest-1"],
   xero_id: "xero-123",
-};
+} as InvoiceItem;
 
 const orderDivider2: InvoiceItem = {
+  ...orderDividerBase,
   uid: "order-div-2",
-  type: "order",
   name: "Order #1002",
   uid_order: "order-2",
-  path: [],
-};
+} as InvoiceItem;
 
 const lineItem3: InvoiceItem = {
+  ...lineItemBase,
   uid: "item-3",
   type: "rental",
   name: "Camera",
   quantity: 1,
   price: {
+    ...priceBase,
     base: 500,
-    formula: "five_day_week" as const,
     chargeable_days: 5,
-    discount: null,
-    taxes: [],
     subtotal: 500,
     subtotal_discounted: 500,
     total: 500,
   },
   path: ["order-div-2"],
-};
+} as InvoiceItem;
 
 const multiOrderInvoiceItems: InvoiceItem[] = [
   orderDivider,
@@ -255,14 +273,14 @@ Deno.test("calculateInvoiceTotals computes totals from billable items only", () 
     { uid: "order-div", type: "order", name: "Order #1", path: [] },
     { uid: "dest", type: "destination", name: "Venue", path: [] },
     { uid: "group", type: "group", name: "Lighting", path: [] },
-    {
-      uid: "item-1", type: "rental", name: "Spot Light", quantity: 2, path: [],
-      price: { base: 100, formula: "five_day_week" as const, chargeable_days: 5, discount: null, taxes: [], subtotal: 200, subtotal_discounted: 200, total: 200 },
-    },
-    {
-      uid: "item-2", type: "sale", name: "Tripod", quantity: 1, path: [],
-      price: { base: 300, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 300, subtotal_discounted: 300, total: 300 },
-    },
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Spot Light", quantity: 2 },
+      { base: 100, chargeable_days: 5, subtotal: 200, subtotal_discounted: 200, total: 200 },
+    ),
+    makeItem(
+      { uid: "item-2", type: "sale", name: "Tripod", quantity: 1 },
+      { base: 300, formula: "fixed", subtotal: 300, subtotal_discounted: 300, total: 300 },
+    ),
   ];
 
   const result = calculateInvoiceTotals(items, []);
@@ -278,14 +296,10 @@ Deno.test("calculateInvoiceTotals computes totals from billable items only", () 
 
 Deno.test("calculateInvoiceTotals applies discount", () => {
   const items: InvoiceItem[] = [
-    {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
-      price: {
-        base: 100, formula: "five_day_week" as const, chargeable_days: 5,
-        discount: { type: "percent", rate: 10, amount: 10 },
-        taxes: [], subtotal: 100, subtotal_discounted: 90, total: 90,
-      },
-    },
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 100, chargeable_days: 5, discount: { type: "percent", rate: 10, amount: 10 }, subtotal: 100, subtotal_discounted: 90, total: 90 },
+    ),
   ];
   const result = calculateInvoiceTotals(items, []);
   assertEquals(result.subtotal, 100);
@@ -296,15 +310,10 @@ Deno.test("calculateInvoiceTotals applies discount", () => {
 
 Deno.test("calculateInvoiceTotals with taxes", () => {
   const items: InvoiceItem[] = [
-    {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
-      price: {
-        base: 100, formula: "five_day_week" as const, chargeable_days: 5,
-        discount: null,
-        taxes: [{ uid: "chi-rental-tax", name: "Chicago Rental Tax", rate: 15, type: "percent", amount: 15 }],
-        subtotal: 100, subtotal_discounted: 100, total: 115,
-      },
-    },
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 100, chargeable_days: 5, taxes: [{ uid: "chi-rental-tax", name: "Chicago Rental Tax", rate: 15, type: "percent", amount: 15 }], subtotal: 100, subtotal_discounted: 100, total: 115 },
+    ),
   ];
   const result = calculateInvoiceTotals(items, TAXES);
   assertEquals(result.subtotal, 100);
@@ -316,10 +325,10 @@ Deno.test("calculateInvoiceTotals with taxes", () => {
 
 Deno.test("calculateInvoiceTotals with payments reduces amount_due", () => {
   const items: InvoiceItem[] = [
-    {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
-      price: { base: 1000, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 1000, subtotal_discounted: 1000, total: 1000 },
-    },
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 1000, formula: "fixed", subtotal: 1000, subtotal_discounted: 1000, total: 1000 },
+    ),
   ];
   const payments = [
     { amount: 400, status: "active" },
@@ -344,10 +353,10 @@ Deno.test("calculateInvoiceTotals with empty items returns zeros", () => {
 
 Deno.test("calculateInvoiceTotals with transaction fee", () => {
   const items: InvoiceItem[] = [
-    {
-      uid: "item-1", type: "rental", name: "Light", quantity: 1, path: [],
-      price: { base: 100, formula: "fixed" as const, chargeable_days: null, discount: null, taxes: [], subtotal: 100, subtotal_discounted: 100, total: 100 },
-    },
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 100, formula: "fixed", subtotal: 100, subtotal_discounted: 100, total: 100 },
+    ),
     {
       uid: "fee-1", type: "transaction_fee", name: "Credit Card Fee", path: [],
       price: { uid: "cc-fee", name: "Credit Card Fee", rate: 3, type: "percent", amount: 0 },
