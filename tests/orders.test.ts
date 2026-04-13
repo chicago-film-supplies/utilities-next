@@ -20,12 +20,19 @@ import {
   isPriceableItem,
   isPreTaxItem,
   isTransactionFeeItem,
+  isSameAsDeliveryDates,
+  isSameAsDeliveryDestination,
+  getDestinationPairItemName,
+  getDefaultChargeDays,
+  syncChargeDaysToItems,
   type LineItem,
+  type PriceObject,
   type Tax,
   orderHasDiscount,
   orderHasRentals,
   orderHasTax,
 } from "../src/orders.ts";
+import type { OrderDatesType, DestinationType } from "@cfs/schemas";
 
 const lineItemBase = getInitialValues(OrderDocLineItem) as Record<string, unknown>;
 const priceBase = lineItemBase.price as Record<string, unknown>;
@@ -820,4 +827,170 @@ Deno.test("buildPackingList returns empty for no eligible items", () => {
   ];
   assertEquals(buildPackingList(items).length, 0);
   assertEquals(buildPackingList(items, true).length, 0);
+});
+
+// ── isSameAsDeliveryDates ───────────────────────────────────────
+
+const baseDates: OrderDatesType = {
+  delivery_start: "2025-01-06T15:00:00.000Z",
+  delivery_end: "2025-01-06T15:00:00.000Z",
+  collection_start: "2025-01-10T21:00:00.000Z",
+  collection_end: "2025-01-10T21:00:00.000Z",
+  charge_start: "2025-01-06T15:00:00.000Z",
+  charge_end: "2025-01-10T21:00:00.000Z",
+};
+
+Deno.test("isSameAsDeliveryDates returns true when charge matches delivery/collection", () => {
+  assertEquals(isSameAsDeliveryDates(baseDates), true);
+});
+
+Deno.test("isSameAsDeliveryDates returns false when charge_start differs", () => {
+  assertEquals(isSameAsDeliveryDates({ ...baseDates, charge_start: "2025-01-07T09:00:00.000Z" }), false);
+});
+
+Deno.test("isSameAsDeliveryDates returns false when charge_end differs", () => {
+  assertEquals(isSameAsDeliveryDates({ ...baseDates, charge_end: "2025-01-09T21:00:00.000Z" }), false);
+});
+
+// ── isSameAsDeliveryDestination ─────────────────────────────────
+
+const baseEndpoint = {
+  uid: "loc1",
+  address: { city: "Dallas", country_name: "US", full: "123 Main St", name: "Warehouse", postcode: "75001", region: "TX", street: "123 Main St" },
+  instructions: "Use back door",
+  contact: { uid: "c1", name: "John" },
+};
+
+Deno.test("isSameAsDeliveryDestination returns true when endpoints match", () => {
+  const dest: DestinationType = {
+    delivery: { ...baseEndpoint },
+    collection: { ...baseEndpoint },
+  };
+  assertEquals(isSameAsDeliveryDestination(dest), true);
+});
+
+Deno.test("isSameAsDeliveryDestination returns false when addresses differ", () => {
+  const dest: DestinationType = {
+    delivery: { ...baseEndpoint },
+    collection: { ...baseEndpoint, address: { ...baseEndpoint.address, city: "Houston" } },
+  };
+  assertEquals(isSameAsDeliveryDestination(dest), false);
+});
+
+Deno.test("isSameAsDeliveryDestination returns false when contacts differ", () => {
+  const dest: DestinationType = {
+    delivery: { ...baseEndpoint },
+    collection: { ...baseEndpoint, contact: { uid: "c2", name: "Jane" } },
+  };
+  assertEquals(isSameAsDeliveryDestination(dest), false);
+});
+
+Deno.test("isSameAsDeliveryDestination returns false when instructions differ", () => {
+  const dest: DestinationType = {
+    delivery: { ...baseEndpoint },
+    collection: { ...baseEndpoint, instructions: "Front door" },
+  };
+  assertEquals(isSameAsDeliveryDestination(dest), false);
+});
+
+Deno.test("isSameAsDeliveryDestination returns true when both null endpoints", () => {
+  const dest = { delivery: {}, collection: {} } as unknown as DestinationType;
+  assertEquals(isSameAsDeliveryDestination(dest), true);
+});
+
+// ── getDestinationPairItemName ──────────────────────────────────
+
+Deno.test("getDestinationPairItemName uses delivery and collection names", () => {
+  const dest: DestinationType = {
+    delivery: { address: { name: "Warehouse A", street: "1 Main", city: "", country_name: "", full: "", postcode: "", region: "" } },
+    collection: { address: { name: "Venue B", street: "2 Oak", city: "", country_name: "", full: "", postcode: "", region: "" } },
+  };
+  assertEquals(getDestinationPairItemName(dest, 0), "Warehouse A - Venue B");
+});
+
+Deno.test("getDestinationPairItemName uses delivery only when same", () => {
+  const addr = { name: "Warehouse A", street: "1 Main", city: "", country_name: "", full: "", postcode: "", region: "" };
+  const dest: DestinationType = {
+    delivery: { address: addr },
+    collection: { address: addr },
+  };
+  assertEquals(getDestinationPairItemName(dest, 0), "Warehouse A");
+});
+
+Deno.test("getDestinationPairItemName falls back to street", () => {
+  const dest: DestinationType = {
+    delivery: { address: { name: "", street: "1 Main St", city: "", country_name: "", full: "", postcode: "", region: "" } },
+    collection: { address: { name: "", street: "2 Oak Ave", city: "", country_name: "", full: "", postcode: "", region: "" } },
+  };
+  assertEquals(getDestinationPairItemName(dest, 0), "1 Main St - 2 Oak Ave");
+});
+
+Deno.test("getDestinationPairItemName falls back to index", () => {
+  const dest: DestinationType = { delivery: {}, collection: {} };
+  assertEquals(getDestinationPairItemName(dest, 0), "Destination 1");
+  assertEquals(getDestinationPairItemName(dest, 2), "Destination 3");
+});
+
+Deno.test("getDestinationPairItemName uses delivery when collection has no address", () => {
+  const dest: DestinationType = {
+    delivery: { address: { name: "Warehouse", street: "", city: "", country_name: "", full: "", postcode: "", region: "" } },
+    collection: {},
+  };
+  assertEquals(getDestinationPairItemName(dest, 0), "Warehouse");
+});
+
+// ── getDefaultChargeDays ────────────────────────────────────────
+
+Deno.test("getDefaultChargeDays returns null for missing dates", () => {
+  assertEquals(getDefaultChargeDays({} as OrderDatesType, []), null);
+  assertEquals(getDefaultChargeDays({ delivery_start: "2025-01-06T09:00:00Z" } as OrderDatesType, []), null);
+});
+
+Deno.test("getDefaultChargeDays returns chargeable days", () => {
+  const dates: OrderDatesType = {
+    delivery_start: "2025-01-06T15:00:00.000Z",
+    delivery_end: "2025-01-06T15:00:00.000Z",
+    collection_start: "2025-01-10T21:00:00.000Z",
+    collection_end: "2025-01-10T21:00:00.000Z",
+    charge_start: "2025-01-06T15:00:00.000Z",
+    charge_end: "2025-01-10T21:00:00.000Z",
+  };
+  const result = getDefaultChargeDays(dates, []);
+  assertEquals(result, 5);
+});
+
+// ── syncChargeDaysToItems ───────────────────────────────────────
+
+Deno.test("syncChargeDaysToItems no-ops when defaults are equal", () => {
+  const items = [makeItem({ type: "rental" }, { chargeable_days: 5 })];
+  syncChargeDaysToItems(items, 5, 5);
+  assertEquals((items[0].price as PriceObject).chargeable_days, 5);
+});
+
+Deno.test("syncChargeDaysToItems updates items matching previous default", () => {
+  const items = [makeItem({ type: "rental" }, { chargeable_days: 5 })];
+  syncChargeDaysToItems(items, 5, 10);
+  assertEquals((items[0].price as PriceObject).chargeable_days, 10);
+});
+
+Deno.test("syncChargeDaysToItems skips manual overrides", () => {
+  const items = [makeItem({ type: "rental" }, { chargeable_days: 7 })];
+  syncChargeDaysToItems(items, 5, 10);
+  assertEquals((items[0].price as PriceObject).chargeable_days, 7);
+});
+
+Deno.test("syncChargeDaysToItems skips structural items", () => {
+  const items = [
+    makeItem({ type: "destination" }, { chargeable_days: 5 }),
+    makeItem({ type: "group" }, { chargeable_days: 5 }),
+  ];
+  syncChargeDaysToItems(items, 5, 10);
+  assertEquals((items[0].price as PriceObject).chargeable_days, 5);
+  assertEquals((items[1].price as PriceObject).chargeable_days, 5);
+});
+
+Deno.test("syncChargeDaysToItems skips when previousDefault is null", () => {
+  const items = [makeItem({ type: "rental" }, { chargeable_days: 5 })];
+  syncChargeDaysToItems(items, null, 10);
+  assertEquals((items[0].price as PriceObject).chargeable_days, 5);
 });

@@ -34,10 +34,13 @@ import type {
   PriceModifierType,
   OrderDocTotalsType,
   OrderDocItemPriceType,
+  OrderDatesType,
+  DestinationType,
   ConsolidatedItemType,
   GroupPathType,
   Tax as SchemaTax,
 } from "@cfs/schemas";
+import { getDuration } from "./dates.ts";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -100,6 +103,92 @@ export type ConsolidatedItem = ConsolidatedItemType;
 
 /** @see {@link GroupPathType} from `@cfs/schemas` */
 export type GroupPath = GroupPathType;
+
+// ── Date & destination comparison ───────────────────────────────
+
+/**
+ * Whether charge dates match the delivery/collection dates
+ * (i.e. no custom charge period has been set).
+ */
+export function isSameAsDeliveryDates(dates: OrderDatesType): boolean {
+  return dates.charge_start === dates.delivery_start
+    && dates.charge_end === dates.collection_start;
+}
+
+/**
+ * Whether a destination's collection endpoint matches its delivery endpoint
+ * (address, contact, and instructions are all equal).
+ */
+export function isSameAsDeliveryDestination(destination: DestinationType): boolean {
+  if (!destination.delivery && !destination.collection) return true;
+  if (!destination.collection) return true;
+  if (!destination.delivery) return false;
+
+  return JSON.stringify(destination.delivery.address) === JSON.stringify(destination.collection.address)
+    && JSON.stringify(destination.delivery.contact) === JSON.stringify(destination.collection.contact)
+    && destination.delivery.instructions === destination.collection.instructions;
+}
+
+/**
+ * Build a display name for a destination pair from its delivery/collection addresses.
+ * Falls back to "Destination N" when no addresses are present.
+ */
+export function getDestinationPairItemName(
+  destination: DestinationType,
+  index: number,
+): string {
+  const deliveryName = destination.delivery?.address?.name || destination.delivery?.address?.street || "";
+  const collectionName = destination.collection?.address?.name || destination.collection?.address?.street || "";
+
+  if (!deliveryName && !collectionName) {
+    return "Destination " + (index + 1);
+  }
+
+  if (!collectionName || deliveryName === collectionName) {
+    return deliveryName || "Destination " + (index + 1);
+  }
+
+  return deliveryName + " - " + collectionName;
+}
+
+/**
+ * Compute default chargeable days from order dates and holidays.
+ * Returns null if required dates are missing.
+ */
+export function getDefaultChargeDays(
+  dates: OrderDatesType,
+  holidays: string[],
+): number | null {
+  if (!dates?.delivery_start || !dates?.collection_start) return null;
+  try {
+    const duration = getDuration(dates, holidays);
+    return duration?.chargeDays ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Update chargeable_days on line items that still match the previous default.
+ * Skips structural items, items without a price, and manual overrides.
+ */
+export function syncChargeDaysToItems(
+  items: LineItem[],
+  previousDefault: number | null,
+  newDefault: number | null,
+): void {
+  if (previousDefault === newDefault) return;
+
+  for (const item of items) {
+    if (item.type === "destination" || item.type === "group") continue;
+    if (!item.price) continue;
+    const days = (item.price as PriceObject).chargeable_days;
+    if (days === null || days === undefined) continue;
+    if (previousDefault === null) continue;
+    if (days !== previousDefault) continue;
+    (item.price as PriceObject).chargeable_days = newDefault;
+  }
+}
 
 // ── Type guards ──────────────────────────────────────────────────
 
