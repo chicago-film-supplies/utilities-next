@@ -607,6 +607,63 @@ export function calculateReplacementTotals(
   };
 }
 
+// ── Path computation ──────────────────────────────────────────────
+
+/**
+ * Build a set of structural item uids (dest/group) from items array.
+ * Used to distinguish structural path elements from product parent refs.
+ */
+export function getStructuralUids(items: LineItem[]): Set<string> {
+  return new Set(
+    items.filter((i) => i.type === "destination" || i.type === "group").map((i) => i.uid),
+  );
+}
+
+/**
+ * Get the parent product uid from an item's path.
+ * Returns null for non-components (where path.at(-2) is a structural uid or absent).
+ */
+export function getParentProductUid(item: LineItem, structuralUids: Set<string>): string | null {
+  const secondToLast = item.path?.at(-2);
+  if (!secondToLast) return null;
+  if (structuralUids.has(secondToLast)) return null;
+  return secondToLast;
+}
+
+/**
+ * Compute full structural paths for a flat items array.
+ * Each item's path = [structural context...] + [component ancestry...] + [self uid].
+ *
+ * Client-sent paths carry component ancestry (from ProductComponent.path).
+ * This function prepends structural context (dest/group) and appends self uid.
+ */
+export function computeItemPaths(items: LineItem[]): void {
+  let currentDestUid: string | null = null;
+  let currentGroupUid: string | null = null;
+  for (const item of items) {
+    if (item.type === "destination") {
+      currentDestUid = item.uid;
+      currentGroupUid = null;
+      item.path = [item.uid];
+      continue;
+    }
+    if (item.type === "group") {
+      currentGroupUid = item.uid;
+      item.path = currentDestUid ? [currentDestUid, item.uid] : [item.uid];
+      continue;
+    }
+    // Line items: structural prefix + component ancestry + self uid
+    const prefix: string[] = [];
+    if (currentDestUid) prefix.push(currentDestUid);
+    if (currentGroupUid) prefix.push(currentGroupUid);
+    // Strip any structural/self uids already in client-sent path
+    const clientPath = (item.path ?? []).filter(
+      (seg) => seg !== currentDestUid && seg !== currentGroupUid && seg !== item.uid,
+    );
+    item.path = [...prefix, ...clientPath, item.uid];
+  }
+}
+
 // ── Item consolidation and destination grouping ──────────────────
 
 const NON_PRODUCT_TYPES = new Set(["destination", "group", "surcharge", "transaction_fee"]);
@@ -620,10 +677,11 @@ const COLLECTION_TYPES = new Set(["rental"]);
  */
 export function getGroupPath(items: LineItem[], index: number): GroupPath {
   const item = items[index];
+  const structuralUids = getStructuralUids(items);
   const result: GroupPath = {
     destination: null,
     group: null,
-    product: item.path.at(-1) ?? null,
+    product: getParentProductUid(item, structuralUids),
   };
 
   for (let i = index - 1; i >= 0; i--) {
@@ -796,7 +854,7 @@ export function getGroupItems(items: LineItem[], index: number): LineItem[] {
   }
 
   return items.filter(
-    (i) => i.path.at(-1) === item.uid && i.zero_priced === true,
+    (i) => i.path.at(-2) === item.uid,
   );
 }
 
@@ -840,7 +898,7 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
     prevSize = descendantUids.size;
     for (let i = 0; i < items.length; i++) {
       if (indexSet.has(i)) continue;
-      const parentUid = items[i].path.at(-1);
+      const parentUid = items[i].path.at(-2);
       if (parentUid && descendantUids.has(parentUid)) {
         indexSet.add(i);
         if (items[i].uid) descendantUids.add(items[i].uid!);

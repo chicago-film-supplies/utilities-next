@@ -9,10 +9,14 @@ import {
   calculateOrderTotals,
   calculateReplacementTotals,
   buildPackingList,
+  computeItemPaths,
   consolidateItems,
   getGroupItems,
   getGroupPath,
   getGroupTotals,
+  getParentProductUid,
+  getRemovalIndices,
+  getStructuralUids,
   getTransactionFeeTotals,
   getTaxTotals,
   getTotalDiscount,
@@ -590,20 +594,33 @@ Deno.test("calculateReplacementTotals multi-tax on replacement", () => {
 
 Deno.test("getGroupPath finds destination and group", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "dest-1" },
-    { type: "group", uid: "g1", name: "Camera", path: ["d1"] },
-    makeItem({ uid: "item-1" }),
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "dest-1" },
+    { type: "group", uid: "g1", name: "Camera", path: ["d1", "g1"] },
+    makeItem({ uid: "item-1", path: ["d1", "g1", "item-1"] }),
   ];
   const result = getGroupPath(items, 2);
   assertEquals(result.destination, "dest-1");
   assertEquals(result.group, "Camera");
+  assertEquals(result.product, null); // parent is group (structural), not a product
+});
+
+Deno.test("getGroupPath returns product parent for component", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "dest-1" },
+    makeItem({ uid: "parent-1", path: ["d1", "parent-1"] }),
+    makeItem({ uid: "child-1", path: ["d1", "parent-1", "child-1"] }),
+  ];
+  const result = getGroupPath(items, 2);
+  assertEquals(result.destination, "dest-1");
+  assertEquals(result.product, "parent-1");
 });
 
 Deno.test("getGroupPath returns nulls when no headers", () => {
-  const items = [makeItem({ uid: "item-1" })];
+  const items = [makeItem({ uid: "item-1", path: ["item-1"] })];
   const result = getGroupPath(items, 0);
   assertEquals(result.destination, null);
   assertEquals(result.group, null);
+  assertEquals(result.product, null);
 });
 
 // ── consolidateItems ─────────────────────────────────────────────
@@ -624,9 +641,9 @@ Deno.test("consolidateItems deduplicates by uid", () => {
 
 Deno.test("consolidateItems skips structural items", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
-    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
-    makeItem({ uid: "p1" }),
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1" },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
   ];
   const result = consolidateItems(items);
   assertEquals(result.length, 1);
@@ -647,11 +664,11 @@ Deno.test("consolidateItems skips transaction fee items", () => {
 
 Deno.test("groupByDestination splits by destination dividers", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1", uid_collection: "d1" },
-    makeItem({ uid: "p1", type: "rental" }),
-    makeItem({ uid: "p2", type: "sale" }),
-    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2", uid_collection: "d2" },
-    makeItem({ uid: "p3", type: "rental" }),
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1", uid_collection: "d1" },
+    makeItem({ uid: "p1", type: "rental", path: ["d1", "p1"] }),
+    makeItem({ uid: "p2", type: "sale", path: ["d1", "p2"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"], uid_delivery: "d2", uid_collection: "d2" },
+    makeItem({ uid: "p3", type: "rental", path: ["d2", "p3"] }),
   ];
   const result = groupByDestination(items, "fallback");
   assertEquals(result.length, 2);
@@ -681,11 +698,11 @@ Deno.test("groupByDestination returns empty section for empty items", () => {
 
 Deno.test("getGroupItems collects destination children", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [] },
-    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
-    makeItem({ uid: "p1" }),
-    makeItem({ uid: "p2" }),
-    { type: "destination", uid: "d2", name: "", path: [] },
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "g1", "p2"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"] },
   ];
   const result = getGroupItems(items, 0);
   assertEquals(result.length, 2);
@@ -693,21 +710,21 @@ Deno.test("getGroupItems collects destination children", () => {
 
 Deno.test("getGroupItems collects group children", () => {
   const items: LineItem[] = [
-    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
-    makeItem({ uid: "p1" }),
-    makeItem({ uid: "p2" }),
-    { type: "group", uid: "g2", name: "G2", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "g1", "p2"] }),
+    { type: "group", uid: "g2", name: "G2", path: ["d1", "g2"] },
   ];
   const result = getGroupItems(items, 0);
   assertEquals(result.length, 2);
 });
 
-Deno.test("getGroupItems collects zero-priced components for product", () => {
+Deno.test("getGroupItems collects all direct children for product", () => {
   const items: LineItem[] = [
-    makeItem({ uid: "parent" }),
-    makeItem({ uid: "child1", path: ["parent"], zero_priced: true }),
-    makeItem({ uid: "child2", path: ["parent"], zero_priced: true }),
-    makeItem({ uid: "other" }),
+    makeItem({ uid: "parent", path: ["d1", "parent"] }),
+    makeItem({ uid: "child1", path: ["d1", "parent", "child1"], zero_priced: true }),
+    makeItem({ uid: "child2", path: ["d1", "parent", "child2"] }),
+    makeItem({ uid: "other", path: ["d1", "other"] }),
   ];
   const result = getGroupItems(items, 0);
   assertEquals(result.length, 2);
@@ -717,9 +734,9 @@ Deno.test("getGroupItems collects zero-priced components for product", () => {
 
 Deno.test("getGroupTotals returns count and pricing", () => {
   const items: LineItem[] = [
-    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
-    makeItem({ uid: "p1" }),
-    makeItem({ uid: "p2" }),
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "g1", "p2"] }),
   ];
   const result = getGroupTotals(items, 0, TAXES);
   assertEquals(result.count, 2);
@@ -730,8 +747,8 @@ Deno.test("getGroupTotals returns count and pricing", () => {
 
 Deno.test("getGroupTotals returns zeros for empty group", () => {
   const items: LineItem[] = [
-    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
-    { type: "group", uid: "g2", name: "G2", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    { type: "group", uid: "g2", name: "G2", path: ["d1", "g2"] },
   ];
   const result = getGroupTotals(items, 0, TAXES);
   assertEquals(result.count, 0);
@@ -744,12 +761,12 @@ Deno.test("getGroupTotals returns zeros for empty group", () => {
 
 Deno.test("buildPackingList returns expanded items with group context", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1", uid_collection: "d1" },
-    { type: "group", uid: "g1", name: "Tables", path: ["d1"] },
-    makeItem({ uid: "p1", type: "rental", name: "Round Table" }),
-    makeItem({ uid: "p2", type: "sale", name: "Tablecloth" }),
-    { type: "group", uid: "g2", name: "Chairs", path: ["d1"] },
-    makeItem({ uid: "p3", type: "rental", name: "Folding Chair" }),
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1", uid_collection: "d1" },
+    { type: "group", uid: "g1", name: "Tables", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", type: "rental", name: "Round Table", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "p2", type: "sale", name: "Tablecloth", path: ["d1", "g1", "p2"] }),
+    { type: "group", uid: "g2", name: "Chairs", path: ["d1", "g2"] },
+    makeItem({ uid: "p3", type: "rental", name: "Folding Chair", path: ["d1", "g2", "p3"] }),
   ];
   const result = buildPackingList(items);
   assertEquals(result.length, 3);
@@ -769,11 +786,11 @@ Deno.test("buildPackingList returns expanded items with group context", () => {
 
 Deno.test("buildPackingList excludes surcharges, fees, and structural items", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
-    makeItem({ uid: "p1", type: "rental" }),
-    { type: "surcharge", uid: "s1", name: "Damage Waiver", path: [] },
-    { type: "transaction_fee", uid: "f1", name: "CC Fee", path: [] },
-    { type: "group", uid: "g1", name: "G1", path: ["d1"] },
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1" },
+    makeItem({ uid: "p1", type: "rental", path: ["d1", "p1"] }),
+    { type: "surcharge", uid: "s1", name: "Damage Waiver", path: ["d1", "s1"] },
+    { type: "transaction_fee", uid: "f1", name: "CC Fee", path: ["d1", "f1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
   ];
   const result = buildPackingList(items);
   assertEquals(result.length, 1);
@@ -782,11 +799,11 @@ Deno.test("buildPackingList excludes surcharges, fees, and structural items", ()
 
 Deno.test("buildPackingList scoped to destination", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1", uid_collection: "d1" },
-    makeItem({ uid: "p1", type: "rental" }),
-    makeItem({ uid: "p2", type: "sale" }),
-    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2", uid_collection: "d2" },
-    makeItem({ uid: "p3", type: "rental" }),
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1", uid_collection: "d1" },
+    makeItem({ uid: "p1", type: "rental", path: ["d1", "p1"] }),
+    makeItem({ uid: "p2", type: "sale", path: ["d1", "p2"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"], uid_delivery: "d2", uid_collection: "d2" },
+    makeItem({ uid: "p3", type: "rental", path: ["d2", "p3"] }),
   ];
   const result = buildPackingList(items, false, "d2");
   assertEquals(result.length, 1);
@@ -795,10 +812,10 @@ Deno.test("buildPackingList scoped to destination", () => {
 
 Deno.test("buildPackingList consolidated deduplicates by uid", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
-    makeItem({ uid: "p1", type: "rental", quantity: 2 }),
-    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2" },
-    makeItem({ uid: "p1", type: "rental", quantity: 3 }),
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1" },
+    makeItem({ uid: "p1", type: "rental", quantity: 2, path: ["d1", "p1"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"], uid_delivery: "d2" },
+    makeItem({ uid: "p1", type: "rental", quantity: 3, path: ["d2", "p1"] }),
   ];
   const result = buildPackingList(items, true);
   assertEquals(result.length, 1);
@@ -808,11 +825,11 @@ Deno.test("buildPackingList consolidated deduplicates by uid", () => {
 
 Deno.test("buildPackingList consolidated + destination scoped", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
-    makeItem({ uid: "p1", type: "rental", quantity: 2 }),
-    { type: "destination", uid: "d2", name: "", path: [], uid_delivery: "d2" },
-    makeItem({ uid: "p1", type: "rental", quantity: 3 }),
-    makeItem({ uid: "p2", type: "sale", quantity: 1 }),
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1" },
+    makeItem({ uid: "p1", type: "rental", quantity: 2, path: ["d1", "p1"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"], uid_delivery: "d2" },
+    makeItem({ uid: "p1", type: "rental", quantity: 3, path: ["d2", "p1"] }),
+    makeItem({ uid: "p2", type: "sale", quantity: 1, path: ["d2", "p2"] }),
   ];
   const result = buildPackingList(items, true, "d2");
   assertEquals(result.length, 2);
@@ -822,8 +839,8 @@ Deno.test("buildPackingList consolidated + destination scoped", () => {
 
 Deno.test("buildPackingList returns empty for no eligible items", () => {
   const items: LineItem[] = [
-    { type: "destination", uid: "d1", name: "", path: [], uid_delivery: "d1" },
-    { type: "surcharge", uid: "s1", name: "Surcharge", path: [] },
+    { type: "destination", uid: "d1", name: "", path: ["d1"], uid_delivery: "d1" },
+    { type: "surcharge", uid: "s1", name: "Surcharge", path: ["d1", "s1"] },
   ];
   assertEquals(buildPackingList(items).length, 0);
   assertEquals(buildPackingList(items, true).length, 0);
@@ -993,4 +1010,182 @@ Deno.test("syncChargeDaysToItems skips when previousDefault is null", () => {
   const items = [makeItem({ type: "rental" }, { chargeable_days: 5 })];
   syncChargeDaysToItems(items, null, 10);
   assertEquals((items[0].price as PriceObject).chargeable_days, 5);
+});
+
+// ── computeItemPaths ────────────────────────────────────────────
+
+Deno.test("computeItemPaths sets dest path to [self uid]", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+  ];
+  computeItemPaths(items);
+  assertEquals(items[0].path, ["d1"]);
+});
+
+Deno.test("computeItemPaths sets group path to [dest, self]", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: [] },
+  ];
+  computeItemPaths(items);
+  assertEquals(items[1].path, ["d1", "g1"]);
+});
+
+Deno.test("computeItemPaths sets line item path to [dest, self]", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "item-1", path: [] }),
+  ];
+  computeItemPaths(items);
+  assertEquals(items[1].path, ["d1", "item-1"]);
+});
+
+Deno.test("computeItemPaths sets line item under group to [dest, group, self]", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: [] },
+    makeItem({ uid: "item-1", path: [] }),
+  ];
+  computeItemPaths(items);
+  assertEquals(items[2].path, ["d1", "g1", "item-1"]);
+});
+
+Deno.test("computeItemPaths preserves component ancestry from client path", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "D", path: [] }),
+    makeItem({ uid: "A", path: ["D"] }),
+    makeItem({ uid: "B", path: ["D", "A"] }),
+  ];
+  computeItemPaths(items);
+  assertEquals(items[1].path, ["d1", "D"]);
+  assertEquals(items[2].path, ["d1", "D", "A"]);
+  assertEquals(items[3].path, ["d1", "D", "A", "B"]);
+});
+
+Deno.test("computeItemPaths handles shared component at different paths", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "D", path: [] }),
+    makeItem({ uid: "A", path: ["D"] }),
+    makeItem({ uid: "B", path: ["D", "A"] }),
+    makeItem({ uid: "C", path: ["D"] }),
+    makeItem({ uid: "B", path: ["D", "C"] }),
+  ];
+  computeItemPaths(items);
+  assertEquals(items[3].path, ["d1", "D", "A", "B"]);
+  assertEquals(items[5].path, ["d1", "D", "C", "B"]);
+});
+
+Deno.test("computeItemPaths resets group context at new destination", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: [] },
+    makeItem({ uid: "p1", path: [] }),
+    { type: "destination", uid: "d2", name: "", path: [] },
+    makeItem({ uid: "p2", path: [] }),
+  ];
+  computeItemPaths(items);
+  assertEquals(items[2].path, ["d1", "g1", "p1"]);
+  assertEquals(items[4].path, ["d2", "p2"]);
+});
+
+Deno.test("computeItemPaths strips duplicate structural/self uids from client path", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "item-1", path: ["d1", "item-1"] }),
+  ];
+  computeItemPaths(items);
+  assertEquals(items[1].path, ["d1", "item-1"]);
+});
+
+Deno.test("computeItemPaths produces unique keys for sibling items", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "item-A", path: [] }),
+    makeItem({ uid: "item-B", path: [] }),
+  ];
+  computeItemPaths(items);
+  const keyA = items[1].path.join("/");
+  const keyB = items[2].path.join("/");
+  assertEquals(keyA !== keyB, true);
+  assertEquals(keyA, "d1/item-A");
+  assertEquals(keyB, "d1/item-B");
+});
+
+// ── getStructuralUids ───────────────────────────────────────────
+
+Deno.test("getStructuralUids returns dest and group uids only", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+  ];
+  const uids = getStructuralUids(items);
+  assertEquals(uids.has("d1"), true);
+  assertEquals(uids.has("g1"), true);
+  assertEquals(uids.has("p1"), false);
+});
+
+// ── getParentProductUid ─────────────────────────────────────────
+
+Deno.test("getParentProductUid returns null for top-level item under dest", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "p1", path: ["d1", "p1"] }),
+  ];
+  const structuralUids = getStructuralUids(items);
+  assertEquals(getParentProductUid(items[1], structuralUids), null);
+});
+
+Deno.test("getParentProductUid returns parent uid for component", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "parent", path: ["d1", "parent"] }),
+    makeItem({ uid: "child", path: ["d1", "parent", "child"] }),
+  ];
+  const structuralUids = getStructuralUids(items);
+  assertEquals(getParentProductUid(items[2], structuralUids), "parent");
+});
+
+Deno.test("getParentProductUid returns null when path.at(-2) is group", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+  ];
+  const structuralUids = getStructuralUids(items);
+  assertEquals(getParentProductUid(items[2], structuralUids), null);
+});
+
+// ── getRemovalIndices ───────────────────────────────────────────
+
+Deno.test("getRemovalIndices removes destination and all children", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "p1", path: ["d1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "p2"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"] },
+  ];
+  assertEquals(getRemovalIndices(items, 0), [0, 1, 2]);
+});
+
+Deno.test("getRemovalIndices removes group and children until next group", () => {
+  const items: LineItem[] = [
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    { type: "group", uid: "g2", name: "G2", path: ["d1", "g2"] },
+    makeItem({ uid: "p2", path: ["d1", "g2", "p2"] }),
+  ];
+  assertEquals(getRemovalIndices(items, 0), [0, 1]);
+});
+
+Deno.test("getRemovalIndices removes product and all descendants", () => {
+  const items: LineItem[] = [
+    makeItem({ uid: "parent", path: ["d1", "parent"] }),
+    makeItem({ uid: "child", path: ["d1", "parent", "child"] }),
+    makeItem({ uid: "grandchild", path: ["d1", "parent", "child", "grandchild"] }),
+    makeItem({ uid: "other", path: ["d1", "other"] }),
+  ];
+  assertEquals(getRemovalIndices(items, 0), [0, 1, 2]);
 });

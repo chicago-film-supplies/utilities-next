@@ -17,6 +17,9 @@ export {
   calculateItemSubtotal,
   calculateItemTax,
   calculateItemTotal,
+  computeItemPaths,
+  getParentProductUid,
+  getStructuralUids,
   type Discount,
   isPriceableItem,
   isPreTaxItem,
@@ -36,6 +39,7 @@ import currency from "currency.js";
 import type { COARevenueType, InvoiceDocItemPrice, InvoiceDocTotals, PriceModifierType } from "@cfs/schemas";
 import {
   calculateItemSubtotal,
+  computeItemPaths,
   getTotalDiscount,
   getTaxTotals,
   getTransactionFeeTotals,
@@ -410,6 +414,44 @@ export function syncOrderToInvoiceSelective(
   }
 
   return result;
+}
+
+// ── Invoice path computation ─────────────────────────────────────
+
+/**
+ * Compute paths for all invoice items, respecting order divider scoping.
+ * Wraps computeItemPaths — strips divider prefix per scope, delegates
+ * to the shared order path logic, then re-adds the prefix.
+ */
+export function computeInvoiceItemPaths(items: InvoiceItem[]): void {
+  let currentDividerUid: string | null = null;
+  let scopeStart = -1;
+
+  for (let i = 0; i <= items.length; i++) {
+    const item = i < items.length ? items[i] : null;
+    const isNewScope = !item || item.type === "order";
+
+    if (isNewScope && currentDividerUid && scopeStart >= 0) {
+      // Process the completed scope
+      const scopedItems = items.slice(scopeStart, i);
+      // Strip divider prefix
+      for (const si of scopedItems) {
+        si.path = stripOrderPrefix(si.path, currentDividerUid);
+      }
+      // Delegate to shared order path computation
+      computeItemPaths(scopedItems as unknown as LineItem[]);
+      // Re-add divider prefix
+      for (const si of scopedItems) {
+        si.path = [currentDividerUid, ...si.path];
+      }
+    }
+
+    if (item?.type === "order") {
+      currentDividerUid = item.uid;
+      item.path = [item.uid];
+      scopeStart = i + 1;
+    }
+  }
 }
 
 // ── Order-scoped item sync ──────────────────────────────────────
