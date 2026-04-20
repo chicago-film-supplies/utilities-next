@@ -16,7 +16,8 @@
  *
  * Published in lockstep with `@cfs/schemas` — version bumps track the
  * schemas package so consumers pin one pair of beta versions without
- * resolving dual shapes (Card vs. retired OrderEvent, etc.).
+ * resolving dual shapes (Card.recurrence_overrides, Recurrence collection
+ * rollout, etc.).
  *
  * @module
  */
