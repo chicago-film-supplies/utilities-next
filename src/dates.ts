@@ -14,6 +14,10 @@
  * console.log(days.days); // 5
  * ```
  *
+ * Published in lockstep with `@cfs/schemas` — version bumps track the
+ * schemas package so consumers pin one pair of beta versions without
+ * resolving dual `DocSource` / `Card` shapes.
+ *
  * @module
  */
 
