@@ -2,7 +2,7 @@
   "version": "5",
   "specifiers": {
     "jsr:@cfs/schemas@*": "3.0.0",
-    "jsr:@cfs/schemas@7.0.0-beta.31": "7.0.0-beta.31",
+    "jsr:@cfs/schemas@7.0.0-beta.33": "7.0.0-beta.33",
     "jsr:@std/assert@^1.0.19": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "npm:@date-fns/tz@^1.4.1": "1.4.1",
@@ -11,8 +11,8 @@
     "npm:zod@^4.3.6": "4.3.6"
   },
   "jsr": {
-    "@cfs/schemas@7.0.0-beta.31": {
-      "integrity": "4c7f6e14077a1eedfe5e0101df2b95e4a1d5d563ede7f18b54282c7de934eb39",
+    "@cfs/schemas@7.0.0-beta.33": {
+      "integrity": "db4eb78ba419420a5384cda7394277dbba154cbd360ae239b6a63741e3c0eded",
       "dependencies": [
         "npm:zod"
       ]
@@ -43,7 +43,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@cfs/schemas@7.0.0-beta.31",
+      "jsr:@cfs/schemas@7.0.0-beta.33",
       "jsr:@std/assert@^1.0.19",
       "npm:@date-fns/tz@^1.4.1",
       "npm:currency.js@^2.0.4",

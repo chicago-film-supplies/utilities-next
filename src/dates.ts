@@ -252,12 +252,12 @@ export function countCfsBusinessDays(
   return { calendarDays, calendarWeeks, days, weeks, label, periodLabel };
 }
 
-/** Date strings required by {@link getDuration}. */
+/** Date strings required by {@link getDuration}. Nullable to mirror OrderDocDatesType — runtime guards throw when either boundary is null. */
 export interface DurationDates {
-  delivery_start: string;
-  collection_start: string;
-  charge_start?: string;
-  charge_end?: string;
+  delivery_start: string | null;
+  collection_start: string | null;
+  charge_start?: string | null;
+  charge_end?: string | null;
 }
 
 /** Active and chargeable duration breakdown returned by {@link getDuration}. */
