@@ -32,8 +32,39 @@ import {
   isWeekend,
   parseISO,
   set,
+  startOfDay,
 } from "date-fns";
 import { TZDate, tz } from "@date-fns/tz";
+
+/**
+ * Canonicalize any valid ISO datetime string to Chicago offset form,
+ * preserving the instant. Idempotent.
+ *
+ * ```ts
+ * toChicagoInstant("2025-12-22T15:15:00.000Z");      // "2025-12-22T09:15:00.000-06:00"
+ * toChicagoInstant("2025-12-22T09:15:00.000-06:00"); // "2025-12-22T09:15:00.000-06:00" (no-op)
+ * toChicagoInstant("2025-12-23T00:15:00.000+09:00"); // "2025-12-22T09:15:00.000-06:00" (same instant)
+ * ```
+ */
+export function toChicagoInstant(input: string): string {
+  return parseISO(input, { in: tz("America/Chicago") }).toISOString();
+}
+
+/**
+ * Canonicalize to Chicago local midnight for the calendar date containing
+ * the input instant. Use for fields that semantically represent a date
+ * (invoice.date, invoice.due_date, payments[].date). Idempotent.
+ *
+ * ```ts
+ * toChicagoStartOfDay("2025-12-22T15:15:00.000Z"); // "2025-12-22T00:00:00.000-06:00"
+ * toChicagoStartOfDay("2025-12-22T03:00:00.000Z"); // "2025-12-21T00:00:00.000-06:00" (Chicago day = Dec 21)
+ * toChicagoStartOfDay("2025-07-04");               // "2025-07-04T00:00:00.000-05:00" (CDT)
+ * ```
+ */
+export function toChicagoStartOfDay(input: string): string {
+  return startOfDay(parseISO(input, { in: tz("America/Chicago") }))
+    .toISOString();
+}
 
 /** Display values returned by {@link formatChargeDays}. */
 export type ChargeDaysLabel = "day" | "days" | "week" | "weeks";

@@ -8,6 +8,8 @@ import {
   isHoliday,
   isOffHours,
   toChargeDays,
+  toChicagoInstant,
+  toChicagoStartOfDay,
 } from "../src/dates.ts";
 
 const holidays = [
@@ -299,5 +301,114 @@ Deno.test("toChargeDays throws for negative", () => {
     () => toChargeDays(-1, false),
     Error,
     "inputValue must be a non-negative number",
+  );
+});
+
+// ── toChicagoInstant ────────────────────────────────────────────
+
+Deno.test("toChicagoInstant converts Z form to Chicago offset (CST)", () => {
+  assertEquals(
+    toChicagoInstant("2025-12-22T15:15:00.000Z"),
+    "2025-12-22T09:15:00.000-06:00",
+  );
+});
+
+Deno.test("toChicagoInstant converts Z form to Chicago offset (CDT)", () => {
+  assertEquals(
+    toChicagoInstant("2025-07-04T14:15:00.000Z"),
+    "2025-07-04T09:15:00.000-05:00",
+  );
+});
+
+Deno.test("toChicagoInstant is no-op for canonical offset form", () => {
+  assertEquals(
+    toChicagoInstant("2025-12-22T09:15:00.000-06:00"),
+    "2025-12-22T09:15:00.000-06:00",
+  );
+});
+
+Deno.test("toChicagoInstant converts other-tz offset to Chicago, same instant", () => {
+  assertEquals(
+    toChicagoInstant("2025-12-23T00:15:00.000+09:00"),
+    "2025-12-22T09:15:00.000-06:00",
+  );
+});
+
+Deno.test("toChicagoInstant preserves instant across forms", () => {
+  const z = "2025-12-22T15:15:00.000Z";
+  const chicago = toChicagoInstant(z);
+  assertEquals(
+    new Date(chicago).getTime(),
+    new Date(z).getTime(),
+  );
+});
+
+Deno.test("toChicagoInstant is idempotent", () => {
+  const once = toChicagoInstant("2025-12-22T15:15:00.000Z");
+  const twice = toChicagoInstant(once);
+  assertEquals(once, twice);
+});
+
+Deno.test("toChicagoInstant DST spring-forward (pre-jump is CST)", () => {
+  assertEquals(
+    toChicagoInstant("2025-03-09T07:30:00.000Z"),
+    "2025-03-09T01:30:00.000-06:00",
+  );
+});
+
+Deno.test("toChicagoInstant DST spring-forward (post-jump is CDT)", () => {
+  assertEquals(
+    toChicagoInstant("2025-03-09T08:30:00.000Z"),
+    "2025-03-09T03:30:00.000-05:00",
+  );
+});
+
+Deno.test("toChicagoInstant DST fall-back (early hour is CST)", () => {
+  assertEquals(
+    toChicagoInstant("2025-11-02T07:30:00.000Z"),
+    "2025-11-02T01:30:00.000-06:00",
+  );
+});
+
+// ── toChicagoStartOfDay ─────────────────────────────────────────
+
+Deno.test("toChicagoStartOfDay snaps instant to Chicago midnight (CST)", () => {
+  assertEquals(
+    toChicagoStartOfDay("2025-12-22T15:15:00.000Z"),
+    "2025-12-22T00:00:00.000-06:00",
+  );
+});
+
+Deno.test("toChicagoStartOfDay crosses back to previous Chicago day", () => {
+  assertEquals(
+    toChicagoStartOfDay("2025-12-22T03:00:00.000Z"),
+    "2025-12-21T00:00:00.000-06:00",
+  );
+});
+
+Deno.test("toChicagoStartOfDay handles date-only string (CDT)", () => {
+  assertEquals(
+    toChicagoStartOfDay("2025-07-04"),
+    "2025-07-04T00:00:00.000-05:00",
+  );
+});
+
+Deno.test("toChicagoStartOfDay handles date-only string (CST)", () => {
+  assertEquals(
+    toChicagoStartOfDay("2025-01-04"),
+    "2025-01-04T00:00:00.000-06:00",
+  );
+});
+
+Deno.test("toChicagoStartOfDay is idempotent", () => {
+  const once = toChicagoStartOfDay("2025-12-22T15:15:00.000Z");
+  const twice = toChicagoStartOfDay(once);
+  assertEquals(once, twice);
+});
+
+Deno.test("toChicagoStartOfDay produces CDT offset for date inside DST window", () => {
+  assertEquals(
+    toChicagoStartOfDay("2025-07-04T12:00:00.000Z"),
+    "2025-07-04T00:00:00.000-05:00",
   );
 });
