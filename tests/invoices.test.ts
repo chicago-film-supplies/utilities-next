@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { getInitialValues, InvoiceDocLineItemSchema, InvoiceDocOrderItem } from "@cfs/schemas";
+import { getInitialValues, InvoiceDocLineItemSchema, InvoiceDocOrderItem, OrderDocDestinationItem, OrderDocGroupItem } from "@cfs/schemas";
 import {
   buildOrderScopedItems,
   calculateInvoiceTotals,
@@ -19,6 +19,7 @@ import {
   syncObjectWithOverride,
   syncOrderDestinationsSelective,
   syncOrderItems,
+  syncOrderToInvoiceSelective,
   syncScalarWithOverride,
 } from "../src/invoices.ts";
 
@@ -199,6 +200,89 @@ Deno.test("buildOrderScopedItems prepends order divider uid to path", () => {
   assertEquals(result[2].path, ["order-div-1", "dest-1", "item-2"]);
 });
 
+Deno.test("buildOrderScopedItems projects order-only fields off line items", () => {
+  // Order line item carrying every order-only field — must NOT leak to invoice shape.
+  const orderItems: LineItem[] = [
+    {
+      uid: "item-1",
+      type: "rental",
+      name: "Light",
+      quantity: 2,
+      path: ["dest-1", "item-1"],
+      stock_method: "reserve",
+      order_number: 1001,
+      uid_order: "order-1",
+      zero_priced: false,
+      uid_delivery: "del-1",
+      uid_collection: "col-1",
+      // @ts-expect-error — inclusion_type not on LineItem type, but exists at runtime on OrderDocLineItem
+      inclusion_type: "mandatory",
+      price: {
+        base: 100,
+        chargeable_days: 5,
+        formula: "five_day_week",
+        subtotal: 200,
+        subtotal_discounted: 200,
+        discount: null,
+        taxes: [],
+        total: 200,
+        replacement: 5000,
+      },
+    },
+  ];
+  const [projected] = buildOrderScopedItems(orderItems, "order-div-1");
+
+  // Projected item passes strict invoice line-item schema — rejects any leaked key.
+  const result = InvoiceDocLineItemSchema.safeParse(projected);
+  assertEquals(result.success, true, JSON.stringify(result.success ? {} : result.error.issues, null, 2));
+
+  // Projected price passes — rejects leaked `replacement`.
+  const keys = Object.keys(projected).sort();
+  assertEquals(
+    keys.includes("stock_method") || keys.includes("order_number") || keys.includes("uid_order") ||
+      keys.includes("inclusion_type") || keys.includes("zero_priced") || keys.includes("uid_delivery") ||
+      keys.includes("uid_collection"),
+    false,
+    `leaked keys present: ${keys.join(", ")}`,
+  );
+  const priceKeys = Object.keys((projected as unknown as { price: Record<string, unknown> }).price);
+  assertEquals(priceKeys.includes("replacement"), false, `leaked price.replacement: ${priceKeys.join(", ")}`);
+});
+
+Deno.test("buildOrderScopedItems preserves destination shape via OrderDocDestinationItem", () => {
+  const destUid = crypto.randomUUID();
+  const orderItems: LineItem[] = [
+    {
+      uid: destUid,
+      type: "destination",
+      name: "Main Venue",
+      description: "first stop",
+      uid_delivery: "del-1",
+      uid_collection: null,
+      path: [destUid],
+    },
+  ];
+  const [projected] = buildOrderScopedItems(orderItems, "order-div-1");
+  const result = OrderDocDestinationItem.safeParse(projected);
+  assertEquals(result.success, true, JSON.stringify(result.success ? {} : result.error.issues, null, 2));
+});
+
+Deno.test("buildOrderScopedItems preserves group shape via OrderDocGroupItem", () => {
+  const groupUid = crypto.randomUUID();
+  const orderItems: LineItem[] = [
+    {
+      uid: groupUid,
+      type: "group",
+      name: "Lighting",
+      description: "",
+      path: ["dest-1", groupUid],
+    },
+  ];
+  const [projected] = buildOrderScopedItems(orderItems, "order-div-1");
+  const result = OrderDocGroupItem.safeParse(projected);
+  assertEquals(result.success, true, JSON.stringify(result.success ? {} : result.error.issues, null, 2));
+});
+
 // ── carryForwardOverrides ───────────────────────────────────────
 
 Deno.test("carryForwardOverrides preserves coa_revenue and xero_id from existing items", () => {
@@ -254,6 +338,44 @@ Deno.test("syncOrderItems replaces scoped items and carries forward overrides", 
   assertEquals(tripod, undefined);
 });
 
+Deno.test("syncOrderItems projects order-only fields off new items (strict schema passes)", () => {
+  // Invoice has a clean divider but no scoped items yet — sync will take the "new item" path.
+  const invoiceItems: InvoiceItem[] = [orderDivider];
+  const orderItems: LineItem[] = [
+    {
+      uid: "dest-1",
+      type: "destination",
+      name: "Venue",
+      uid_delivery: "del-1",
+      uid_collection: null,
+      description: "",
+      path: ["dest-1"],
+    },
+    {
+      uid: "item-1",
+      type: "rental",
+      name: "Light",
+      quantity: 1,
+      path: ["dest-1", "item-1"],
+      stock_method: "reserve",
+      order_number: 1001,
+      uid_order: "order-1",
+      zero_priced: false,
+      // @ts-expect-error — inclusion_type not on LineItem type
+      inclusion_type: "mandatory",
+      price: {
+        base: 100, chargeable_days: 5, formula: "five_day_week",
+        subtotal: 100, subtotal_discounted: 100, discount: null, taxes: [], total: 100,
+        replacement: 5000,
+      },
+    },
+  ];
+  const result = syncOrderItems(invoiceItems, orderItems, "order-div-1");
+  const lineItem = result.find((i) => i.uid === "item-1")!;
+  const parsed = InvoiceDocLineItemSchema.safeParse(lineItem);
+  assertEquals(parsed.success, true, JSON.stringify(parsed.success ? {} : parsed.error.issues, null, 2));
+});
+
 Deno.test("syncOrderItems preserves order when divider not found (appends)", () => {
   const items: InvoiceItem[] = [
     { uid: "existing", type: "rental", name: "Existing Item", quantity: 1, path: ["existing"] },
@@ -265,6 +387,78 @@ Deno.test("syncOrderItems preserves order when divider not found (appends)", () 
   assertEquals(result.length, 2);
   assertEquals(result[0].uid, "existing");
   assertEquals(result[1].path, ["unknown-divider", "new-item"]);
+});
+
+// ── syncOrderToInvoiceSelective ─────────────────────────────────
+
+Deno.test("syncOrderToInvoiceSelective projects new items to invoice-line-item shape", () => {
+  // No prev order, no current invoice items — everything takes the "new item" branch.
+  const newOrderItems: LineItem[] = [
+    {
+      uid: "item-1",
+      type: "rental",
+      name: "Light",
+      quantity: 1,
+      path: ["dest-1", "item-1"],
+      stock_method: "reserve",
+      order_number: 1001,
+      uid_order: "order-1",
+      zero_priced: false,
+      price: {
+        base: 100, chargeable_days: 5, formula: "five_day_week",
+        subtotal: 100, subtotal_discounted: 100, discount: null, taxes: [], total: 100,
+        replacement: 5000,
+      },
+    },
+  ];
+  const result = syncOrderToInvoiceSelective([], newOrderItems, [], "order-div-1");
+  assertEquals(result.length, 1);
+  const parsed = InvoiceDocLineItemSchema.safeParse(result[0]);
+  assertEquals(parsed.success, true, JSON.stringify(parsed.success ? {} : parsed.error.issues, null, 2));
+});
+
+Deno.test("syncOrderToInvoiceSelective projects synced items and carries forward invoice-only fields", () => {
+  // Prev order + matching invoice item with overrides → sync branch replaces body, keeps overrides.
+  const prevItem: LineItem = {
+    uid: "item-1",
+    type: "rental",
+    name: "Light",
+    quantity: 1,
+    path: ["dest-1", "item-1"],
+    price: {
+      base: 100, chargeable_days: 5, formula: "five_day_week",
+      subtotal: 100, subtotal_discounted: 100, discount: null, taxes: [], total: 100,
+    } as unknown as LineItem["price"],
+  };
+  const invoiceItem: InvoiceItem = {
+    ...prevItem,
+    path: ["order-div-1", "dest-1", "item-1"],
+    coa_revenue: 4100,
+    xero_id: "xero-1",
+  } as InvoiceItem;
+  const newItem: LineItem = {
+    ...prevItem,
+    name: "Light v2",
+    quantity: 3,
+    // Order-only fields must NOT survive into invoice item.
+    stock_method: "reserve",
+    order_number: 1001,
+    uid_order: "order-1",
+  };
+
+  const result = syncOrderToInvoiceSelective([prevItem], [newItem], [invoiceItem], "order-div-1");
+  assertEquals(result.length, 1);
+  const out = result[0];
+
+  // New values from projected order item
+  assertEquals(out.name, "Light v2");
+  assertEquals(out.quantity, 3);
+  // Carried forward from the overridden invoice item
+  assertEquals((out as InvoiceItem).coa_revenue, 4100);
+  assertEquals((out as InvoiceItem).xero_id, "xero-1");
+  // Projected — strict schema passes
+  const parsed = InvoiceDocLineItemSchema.safeParse(out);
+  assertEquals(parsed.success, true, JSON.stringify(parsed.success ? {} : parsed.error.issues, null, 2));
 });
 
 // ── calculateInvoiceTotals ─────────────────────────────────────

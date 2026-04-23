@@ -36,7 +36,7 @@ export {
 } from "./orders.ts";
 
 import currency from "currency.js";
-import type { COARevenueType, DocDestinationType, InvoiceDocItemPrice, InvoiceDocTotals, PriceModifierType } from "@cfs/schemas";
+import type { COARevenueType, DocDestinationType, DocLineItemTypeType, InvoiceDocItemPrice, InvoiceDocTotals, PriceFormulaType, PriceModifierType } from "@cfs/schemas";
 import {
   calculateItemSubtotal,
   computeItemPaths,
@@ -269,6 +269,68 @@ function stripOrderPrefix(path: string[], orderDividerUid: string): string[] {
 }
 
 /**
+ * Project an order item to its invoice-item shape, scoped under an order divider.
+ *
+ * Order items carry fields (`stock_method`, `order_number`, `uid_order`,
+ * `inclusion_type`, `zero_priced`, `uid_delivery`/`uid_collection` on line items,
+ * `price.replacement`) that `InvoiceDocLineItemSchema` (strict) rejects. Spreading
+ * `...orderItem` into an invoice item leaks them. Call this helper at every
+ * order → invoice boundary instead.
+ *
+ * `destination` and `group` items share their shape with the order doc, so they
+ * pass through. Line items (and `transaction_fee`, which is stored as a
+ * line-item-shaped invoice item) are narrowed to the invoice-line-item keys.
+ *
+ * Mirrors the hand-picked mapping in `api-cloudrun/src/services/invoices.ts`
+ * (`createInvoice`) so sync output is shape-consistent with create output.
+ */
+function projectOrderItemToInvoiceItem(item: LineItem, orderDividerUid: string): InvoiceItem {
+  const basePath = item.path ?? [];
+  const path = [orderDividerUid, ...basePath];
+
+  if (item.type === "destination") {
+    return {
+      uid: item.uid,
+      type: "destination",
+      name: item.name,
+      description: item.description ?? "",
+      uid_delivery: item.uid_delivery ?? null,
+      uid_collection: item.uid_collection ?? null,
+      path,
+    } as InvoiceItem;
+  }
+  if (item.type === "group") {
+    return {
+      uid: item.uid,
+      type: "group",
+      name: item.name,
+      description: item.description ?? "",
+      path,
+    } as InvoiceItem;
+  }
+
+  const p = (item.price ?? {}) as Partial<InvoiceDocItemPrice>;
+  return {
+    uid: item.uid,
+    type: item.type as DocLineItemTypeType,
+    name: item.name,
+    description: item.description ?? "",
+    quantity: item.quantity ?? 0,
+    price: {
+      base: p.base ?? 0,
+      chargeable_days: p.chargeable_days ?? null,
+      formula: (p.formula ?? "five_day_week") as PriceFormulaType,
+      subtotal: p.subtotal ?? 0,
+      subtotal_discounted: p.subtotal_discounted ?? 0,
+      discount: p.discount ?? null,
+      taxes: p.taxes ?? [],
+      total: p.total ?? 0,
+    },
+    path,
+  } as InvoiceItem;
+}
+
+/**
  * Pick only invoice-only override fields from an invoice item.
  * Used to carry forward overrides when replacing an item with updated order data.
  */
@@ -383,16 +445,12 @@ export function syncOrderToInvoiceSelective(
     processedInvoicePaths.add(pathKey);
 
     if (!invoiceItem) {
-      // New item — add it scoped under the order divider
-      result.push({
-        ...newItem,
-        path: newItem.path ? [orderDividerUid, ...newItem.path] : [orderDividerUid],
-      });
+      // New item — project to invoice shape, scoped under the order divider
+      result.push(projectOrderItemToInvoiceItem(newItem, orderDividerUid));
     } else if (prevItem && isItemSynced(prevItem, invoiceItem, orderDividerUid)) {
-      // Not overridden — update with new order item, carry forward invoice-only fields
+      // Not overridden — replace with projected order item, carry forward invoice-only fields
       result.push({
-        ...newItem,
-        path: newItem.path ? [orderDividerUid, ...newItem.path] : [orderDividerUid],
+        ...projectOrderItemToInvoiceItem(newItem, orderDividerUid),
         ...pickInvoiceOnlyFields(invoiceItem),
       });
     } else {
@@ -490,17 +548,15 @@ export function removeOrderScopedItems(items: InvoiceItem[], orderDividerUid: st
 
 /**
  * Build invoice items from an order's items, scoped under an order divider.
- * Prepends the order divider uid to each item's path.
+ * Projects each order item to its invoice-item shape and prepends the order
+ * divider uid to its path.
  *
  * @param orderItems - The order's items array (may contain destination/group/line items)
  * @param orderDividerUid - The uid of the order divider these items belong under
- * @returns Items with path prepended by orderDividerUid
+ * @returns Items projected to invoice shape with path prepended by orderDividerUid
  */
-export function buildOrderScopedItems(orderItems: LineItem[], orderDividerUid: string): LineItem[] {
-  return orderItems.map((item) => ({
-    ...item,
-    path: item.path ? [orderDividerUid, ...item.path] : [orderDividerUid],
-  }));
+export function buildOrderScopedItems(orderItems: LineItem[], orderDividerUid: string): InvoiceItem[] {
+  return orderItems.map((item) => projectOrderItemToInvoiceItem(item, orderDividerUid));
 }
 
 /**
