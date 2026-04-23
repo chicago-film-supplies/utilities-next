@@ -9,12 +9,17 @@ import {
   flattenForXero,
   getOrderScopedItems,
   getXeroUnitAmount,
+  type InvoiceDestinationPair,
   type InvoiceItem,
   type LineItem,
   type Tax,
   recomputePaymentTotals,
+  removeOrderScopedDestinations,
   removeOrderScopedItems,
+  syncObjectWithOverride,
+  syncOrderDestinationsSelective,
   syncOrderItems,
+  syncScalarWithOverride,
 } from "../src/invoices.ts";
 
 // ── Schema bases ────────────────────────────────────────────────
@@ -489,4 +494,120 @@ Deno.test("computeInvoiceItemPaths produces unique keys for siblings", () => {
   const keyA = items[2].path.join("/");
   const keyB = items[3].path.join("/");
   assertEquals(keyA !== keyB, true);
+});
+
+// ── Top-level field sync helpers ────────────────────────────────
+
+function makePair(
+  deliveryUid: string,
+  collectionUid: string,
+  overrides: { delivery?: { instructions?: string | null }; collection?: { instructions?: string | null } } = {},
+) {
+  return {
+    delivery: { uid: deliveryUid, address: null, instructions: overrides.delivery?.instructions ?? null, contact: null },
+    collection: { uid: collectionUid, address: null, instructions: overrides.collection?.instructions ?? null, contact: null },
+  };
+}
+
+Deno.test("syncOrderDestinationsSelective adds new pairs tagged with uid_order", () => {
+  const prev = [makePair("d1", "c1")];
+  const next = [makePair("d1", "c1"), makePair("d2", "c2")];
+  const invoice: InvoiceDestinationPair[] = [{ uid_order: "o1", ...makePair("d1", "c1") }];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 2);
+  assertEquals(result[1].delivery.uid, "d2");
+  assertEquals(result[1].uid_order, "o1");
+});
+
+Deno.test("syncOrderDestinationsSelective replaces synced pairs with new order data", () => {
+  const prev = [makePair("d1", "c1", { delivery: { instructions: "old" } })];
+  const next = [makePair("d1", "c1", { delivery: { instructions: "new" } })];
+  const invoice: InvoiceDestinationPair[] = [{ uid_order: "o1", ...makePair("d1", "c1", { delivery: { instructions: "old" } }) }];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].delivery.instructions, "new");
+});
+
+Deno.test("syncOrderDestinationsSelective keeps overridden pairs (invoice differs from prev)", () => {
+  const prev = [makePair("d1", "c1", { delivery: { instructions: "orig" } })];
+  const next = [makePair("d1", "c1", { delivery: { instructions: "new" } })];
+  const invoice: InvoiceDestinationPair[] = [{ uid_order: "o1", ...makePair("d1", "c1", { delivery: { instructions: "manual edit" } }) }];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].delivery.instructions, "manual edit");
+});
+
+Deno.test("syncOrderDestinationsSelective drops removed pairs when not overridden", () => {
+  const prev = [makePair("d1", "c1"), makePair("d2", "c2")];
+  const next = [makePair("d1", "c1")];
+  const invoice: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o1", ...makePair("d2", "c2") },
+  ];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].delivery.uid, "d1");
+});
+
+Deno.test("syncOrderDestinationsSelective keeps removed pairs when overridden", () => {
+  const prev = [makePair("d1", "c1"), makePair("d2", "c2", { delivery: { instructions: "orig" } })];
+  const next = [makePair("d1", "c1")];
+  const invoice: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o1", ...makePair("d2", "c2", { delivery: { instructions: "manual edit" } }) },
+  ];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 2);
+  assertEquals(result[1].delivery.instructions, "manual edit");
+});
+
+Deno.test("syncOrderDestinationsSelective leaves out-of-scope (other-order) pairs untouched", () => {
+  const prev = [makePair("d1", "c1")];
+  const next: ReturnType<typeof makePair>[] = [];
+  const invoice: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o2", ...makePair("dX", "cX") },
+  ];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].uid_order, "o2");
+  assertEquals(result[0].delivery.uid, "dX");
+});
+
+Deno.test("removeOrderScopedDestinations filters by uid_order", () => {
+  const dests: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o2", ...makePair("d2", "c2") },
+  ];
+  const result = removeOrderScopedDestinations(dests, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].uid_order, "o2");
+});
+
+Deno.test("syncScalarWithOverride replaces when invoice matches prev", () => {
+  assertEquals(syncScalarWithOverride("foo", "bar", "foo"), "bar");
+  assertEquals(syncScalarWithOverride(null, "new", null), "new");
+  assertEquals(syncScalarWithOverride(undefined, "new", undefined), "new");
+});
+
+Deno.test("syncScalarWithOverride keeps invoice when it differs from prev", () => {
+  assertEquals(syncScalarWithOverride("foo", "bar", "manual"), "manual");
+  assertEquals(syncScalarWithOverride(null, "new", "manual"), "manual");
+});
+
+Deno.test("syncObjectWithOverride respects keys subset", () => {
+  const prev = { uid: "org1", name: "A", tax_profile: "applied" };
+  const next = { uid: "org1", name: "B", tax_profile: "applied" };
+  const invoice = { uid: "org1", name: "A", tax_profile: "exempt" };
+  // Keys-subset match on (uid, name): prev.name === invoice.name → replace.
+  const result = syncObjectWithOverride(prev, next, invoice, ["uid", "name"]);
+  assertEquals(result, next);
+});
+
+Deno.test("syncObjectWithOverride keeps invoice when compared subset diverges", () => {
+  const prev = { uid: "org1", name: "A" };
+  const next = { uid: "org1", name: "B" };
+  const invoice = { uid: "org1", name: "manual" };
+  const result = syncObjectWithOverride(prev, next, invoice, ["uid", "name"]);
+  assertEquals(result, invoice);
 });

@@ -36,7 +36,7 @@ export {
 } from "./orders.ts";
 
 import currency from "currency.js";
-import type { COARevenueType, InvoiceDocItemPrice, InvoiceDocTotals, PriceModifierType } from "@cfs/schemas";
+import type { COARevenueType, DocDestinationType, InvoiceDocItemPrice, InvoiceDocTotals, PriceModifierType } from "@cfs/schemas";
 import {
   calculateItemSubtotal,
   computeItemPaths,
@@ -593,4 +593,168 @@ export function syncOrderItems(
   const result = [...withoutOld];
   result.splice(insertAt, 0, orderDivider, ...withOverrides);
   return result;
+}
+
+// ── Top-level field co-write helpers ────────────────────────────
+
+/**
+ * Invoice-side destination pair — matches the schemas-next
+ * `InvoiceDocDestinationType` (a `DocDestinationType` plus a `uid_order`
+ * scope field). Defined structurally here so this module can be published
+ * ahead of / alongside the schemas-next beta that adds the type.
+ */
+export interface InvoiceDestinationPair extends DocDestinationType {
+  uid_order: string;
+}
+
+/**
+ * Stable key for matching a destination pair by its endpoint uids.
+ * Each endpoint's `uid` references a record in the destinations collection;
+ * the (delivery.uid, collection.uid) tuple uniquely identifies a pair
+ * within a single order.
+ */
+function destPairKey(uidOrder: string, pair: DocDestinationType): string {
+  return [uidOrder, pair.delivery?.uid ?? "", pair.collection?.uid ?? ""].join("/");
+}
+
+/** Stable key for an invoice-side pair (uses its own uid_order). */
+function invoicePairKey(pair: InvoiceDestinationPair): string {
+  return destPairKey(pair.uid_order, pair);
+}
+
+/** Deep-equality check on a pair's endpoint payload, ignoring uid_order. */
+function pairsMatch(a: DocDestinationType, b: DocDestinationType): boolean {
+  return JSON.stringify({ delivery: a.delivery, collection: a.collection })
+    === JSON.stringify({ delivery: b.delivery, collection: b.collection });
+}
+
+/**
+ * Selectively sync one order's destination pairs into an invoice's destinations,
+ * respecting invoice-side overrides. Per-pair matching is by
+ * `(uid_order, delivery.uid, collection.uid)`; only pairs scoped to `uidOrder`
+ * are touched — pairs from other orders pass through unchanged.
+ *
+ * Policy per pair:
+ * - Not in invoice (new in order) → add, tagged with `uid_order`.
+ * - In invoice AND prev order matches current invoice → replace with new order pair.
+ * - In invoice BUT prev order ≠ invoice → overridden, keep invoice version.
+ * - In invoice but not in new order:
+ *   - prev matches invoice → deleted from order, drop.
+ *   - prev ≠ invoice → overridden, keep.
+ *
+ * @param prevOrderDests - Pairs from the previous version of the order
+ * @param newOrderDests - Pairs from the new version of the order
+ * @param currentInvoiceDests - Current full invoice destinations array (all orders)
+ * @param uidOrder - The order uid this sync is scoped to
+ * @returns Updated full invoice destinations array
+ */
+export function syncOrderDestinationsSelective(
+  prevOrderDests: DocDestinationType[],
+  newOrderDests: DocDestinationType[],
+  currentInvoiceDests: InvoiceDestinationPair[],
+  uidOrder: string,
+): InvoiceDestinationPair[] {
+  // Index prev order pairs by key (scoped to uidOrder).
+  const prevByKey = new Map<string, DocDestinationType>();
+  for (const pair of prevOrderDests) {
+    prevByKey.set(destPairKey(uidOrder, pair), pair);
+  }
+
+  // Partition invoice pairs: in-scope (this order) vs out-of-scope (other orders).
+  const inScope = new Map<string, InvoiceDestinationPair>();
+  const outOfScope: InvoiceDestinationPair[] = [];
+  for (const pair of currentInvoiceDests) {
+    if (pair.uid_order === uidOrder) {
+      inScope.set(invoicePairKey(pair), pair);
+    } else {
+      outOfScope.push(pair);
+    }
+  }
+
+  const synced: InvoiceDestinationPair[] = [];
+  const processedKeys = new Set<string>();
+
+  // Walk new order pairs in order.
+  for (const newPair of newOrderDests) {
+    const key = destPairKey(uidOrder, newPair);
+    processedKeys.add(key);
+    const prev = prevByKey.get(key);
+    const inv = inScope.get(key);
+
+    if (!inv) {
+      // New pair — add tagged with uid_order.
+      synced.push({ uid_order: uidOrder, delivery: newPair.delivery, collection: newPair.collection });
+    } else if (prev && pairsMatch(prev, inv)) {
+      // Not overridden — replace with new order pair.
+      synced.push({ uid_order: uidOrder, delivery: newPair.delivery, collection: newPair.collection });
+    } else {
+      // Overridden (or prev missing) — keep invoice version.
+      synced.push(inv);
+    }
+  }
+
+  // Handle pairs present in invoice but not in new order.
+  for (const [key, inv] of inScope) {
+    if (processedKeys.has(key)) continue;
+    const prev = prevByKey.get(key);
+    if (prev && !pairsMatch(prev, inv)) {
+      // Overridden — keep even though removed from order.
+      synced.push(inv);
+    }
+    // Else: synced and removed → drop.
+  }
+
+  return [...outOfScope, ...synced];
+}
+
+/**
+ * Remove all destination pairs scoped to a specific order.
+ * Mirrors `removeOrderScopedItems` for the items array.
+ */
+export function removeOrderScopedDestinations(
+  dests: InvoiceDestinationPair[],
+  uidOrder: string,
+): InvoiceDestinationPair[] {
+  return dests.filter((d) => d.uid_order !== uidOrder);
+}
+
+/**
+ * Scalar co-write with override detection. Returns the new order value if
+ * the invoice value still matches the previous order value (i.e. the invoice
+ * has not been manually edited on this field); otherwise returns the current
+ * invoice value (treated as an override, preserved).
+ *
+ * Values are compared by strict equality (`===`). Both `undefined` and `null`
+ * participate in the match — a field that was `null` on prev and is `null`
+ * on the invoice will accept a new non-null order value.
+ */
+export function syncScalarWithOverride<T>(
+  prevOrderValue: T | undefined,
+  newOrderValue: T | undefined,
+  currentInvoiceValue: T | undefined,
+): T | undefined {
+  return prevOrderValue === currentInvoiceValue ? newOrderValue : currentInvoiceValue;
+}
+
+/**
+ * Object co-write with override detection. Like `syncScalarWithOverride` but
+ * compares two objects for deep equality via JSON.stringify. If `keys` is
+ * provided, only those keys are compared (useful when one side carries
+ * fields the other doesn't — e.g. invoice.organization.tax_profile has no
+ * equivalent on the order snapshot).
+ */
+export function syncObjectWithOverride<T extends Record<string, unknown>>(
+  prevOrderValue: T,
+  newOrderValue: T,
+  currentInvoiceValue: T,
+  keys?: (keyof T)[],
+): T {
+  const pick = (v: T) => {
+    if (!keys) return v;
+    const out: Record<string, unknown> = {};
+    for (const k of keys) out[k as string] = v[k];
+    return out;
+  };
+  const matches = JSON.stringify(pick(prevOrderValue)) === JSON.stringify(pick(currentInvoiceValue));
+  return matches ? newOrderValue : currentInvoiceValue;
 }
