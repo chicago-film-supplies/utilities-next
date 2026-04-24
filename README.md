@@ -3,6 +3,9 @@
 Shared date and order utility functions for CFS applications, published to
 [JSR](https://jsr.io/@cfs/utilities).
 
+See [API.md](./API.md) for the full symbol reference (generated from source),
+or browse on [JSR](https://jsr.io/@cfs/utilities/doc/all_symbols).
+
 ## Usage
 
 ### Dates
