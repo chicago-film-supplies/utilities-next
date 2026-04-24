@@ -10,6 +10,7 @@ import {
   toChargeDays,
   toChicagoInstant,
   toChicagoStartOfDay,
+  toChicagoYmd,
 } from "../src/dates.ts";
 
 const holidays = [
@@ -411,4 +412,40 @@ Deno.test("toChicagoStartOfDay produces CDT offset for date inside DST window", 
     toChicagoStartOfDay("2025-07-04T12:00:00.000Z"),
     "2025-07-04T00:00:00.000-05:00",
   );
+});
+
+// ── toChicagoYmd ────────────────────────────────────────────────
+
+Deno.test("toChicagoYmd returns Chicago calendar date from canonical CST offset", () => {
+  assertEquals(
+    toChicagoYmd("2025-02-14T00:00:00.000-06:00"),
+    "2025-02-14",
+  );
+});
+
+Deno.test("toChicagoYmd returns Chicago calendar date from canonical CDT offset", () => {
+  assertEquals(
+    toChicagoYmd("2025-07-04T00:00:00.000-05:00"),
+    "2025-07-04",
+  );
+});
+
+Deno.test("toChicagoYmd interprets Z-form in Chicago TZ (midnight-crossing)", () => {
+  // 2025-02-14T03:00:00Z === 2025-02-13T21:00:00-06:00 (Chicago day = Feb 13)
+  assertEquals(
+    toChicagoYmd("2025-02-14T03:00:00.000Z"),
+    "2025-02-13",
+  );
+});
+
+Deno.test("toChicagoYmd interprets Z-form daytime in Chicago TZ (same day)", () => {
+  assertEquals(
+    toChicagoYmd("2025-07-04T18:00:00.000Z"),
+    "2025-07-04",
+  );
+});
+
+Deno.test("toChicagoYmd round-trips with toChicagoStartOfDay", () => {
+  const start = toChicagoStartOfDay("2025-02-14");
+  assertEquals(toChicagoYmd(start), "2025-02-14");
 });

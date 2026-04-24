@@ -24,6 +24,7 @@
 
 import {
   addDays,
+  format,
   getHours,
   isAfter,
   isBefore,
@@ -64,6 +65,21 @@ export function toChicagoInstant(input: string): string {
 export function toChicagoStartOfDay(input: string): string {
   return startOfDay(parseISO(input, { in: tz("America/Chicago") }))
     .toISOString();
+}
+
+/**
+ * Format an ISO datetime as the Chicago calendar date in `YYYY-MM-DD` form.
+ * The inverse of {@link toChicagoStartOfDay} — use to populate
+ * `<input type="date">` from a canonical Chicago-offset value.
+ *
+ * ```ts
+ * toChicagoYmd("2025-02-14T00:00:00.000-06:00"); // "2025-02-14"
+ * toChicagoYmd("2025-02-14T03:00:00.000Z");      // "2025-02-13" (Chicago day)
+ * toChicagoYmd("2025-07-04T00:00:00.000-05:00"); // "2025-07-04" (CDT)
+ * ```
+ */
+export function toChicagoYmd(input: string): string {
+  return format(parseISO(input), "yyyy-MM-dd", { in: tz("America/Chicago") });
 }
 
 /** Display values returned by {@link formatChargeDays}. */
