@@ -1,6 +1,6 @@
 # `@cfs/utilities` API Reference
 
-_Generated from source by `scripts/generate-api-docs.ts` — do not edit by hand. Browsable version on [JSR](https://jsr.io/@cfs/utilities/doc/all_symbols)._
+_Generated from source by `scripts/generate-api-docs.ts` — do not edit by hand. A structured companion is emitted alongside as `API.json`. Browsable version on [JSR](https://jsr.io/@cfs/utilities/doc/all_symbols)._
 
 ## `@cfs/utilities/dates`
 

@@ -15,7 +15,7 @@
     "lint": "deno lint",
     "check": "deno check src/dates.ts src/invoices.ts src/orders.ts src/products.ts",
     "docs": "deno run --allow-run --allow-read --allow-write scripts/generate-api-docs.ts",
-    "docs:check": "deno task docs && git diff --exit-code -- API.md"
+    "docs:check": "deno task docs && git diff --exit-code -- API.md API.json"
   },
   "imports": {
     "date-fns": "npm:date-fns@^4.1.0",
@@ -33,7 +33,8 @@
       "deno.json",
       "LICENSE",
       "README.md",
-      "API.md"
+      "API.md",
+      "API.json"
     ]
   }
 }

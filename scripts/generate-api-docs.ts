@@ -1,12 +1,13 @@
 #!/usr/bin/env -S deno run --allow-run --allow-read --allow-write
 
 /**
- * Generates `API.md` at the repo root from `deno doc --json` output across
- * all package entrypoints listed in `deno.json`.
+ * Generates `API.md` and `API.json` at the repo root from `deno doc --json`
+ * output across all package entrypoints listed in `deno.json`.
  *
  * Output must be deterministic: no absolute paths, no timestamps, symbols
  * sorted alphabetically within each entrypoint, entrypoints rendered in
- * the order declared in deno.json.
+ * the order declared in deno.json. The JSON file mirrors the markdown
+ * structure so consumers can pick whichever format suits them.
  */
 
 type JsDocTag = {
@@ -70,6 +71,40 @@ type DocRoot = {
   nodes: Record<string, FileNode>;
 };
 
+// Intermediate model — consumed by both markdown and JSON emitters so the
+// two outputs stay in lockstep.
+
+type FunctionSummary = {
+  kind: "function";
+  name: string;
+  signature: string;
+  doc: string;
+  paramTags: { name: string; doc: string }[];
+  returnsTag: string | null;
+};
+
+type DeclaredSummary = {
+  kind: "typeAlias" | "interface" | "variable";
+  name: string;
+  declaration: string;
+  doc: string;
+};
+
+type OtherSummary = {
+  kind: "other";
+  name: string;
+  declaredKind: string;
+  doc: string;
+};
+
+type SymbolSummary = FunctionSummary | DeclaredSummary | OtherSummary;
+
+type EntrypointSummary = {
+  entrypoint: string;
+  moduleDoc: string;
+  symbols: SymbolSummary[];
+};
+
 function renderType(t: TsType | undefined): string {
   if (!t) return "unknown";
 
@@ -121,130 +156,129 @@ function renderFunctionSig(name: string, def: any): string {
   return `${name}(${params}): ${ret}`;
 }
 
-function tagsOfKind(jsDoc: JsDoc | undefined, kind: string): JsDocTag[] {
-  return (jsDoc?.tags ?? []).filter((t) => t.kind === kind);
-}
-
-function renderFunction(name: string, decl: Declaration): string {
-  const lines: string[] = [];
-  lines.push(`### \`${renderFunctionSig(name, decl.def)}\``);
-  lines.push("");
-
-  if (decl.jsDoc?.doc) {
-    lines.push(decl.jsDoc.doc.trim());
-    lines.push("");
-  }
-
-  const paramTags = tagsOfKind(decl.jsDoc, "param");
-  if (paramTags.length > 0) {
-    lines.push("**Parameters**");
-    lines.push("");
-    for (const tag of paramTags) {
-      const pname = tag.name ?? "";
-      const pdoc = (tag.doc ?? "").trim();
-      lines.push(`- \`${pname}\`${pdoc ? ` — ${pdoc}` : ""}`);
-    }
-    lines.push("");
-  }
-
-  const returnTags = [
-    ...tagsOfKind(decl.jsDoc, "return"),
-    ...tagsOfKind(decl.jsDoc, "returns"),
-  ];
-  if (returnTags.length > 0 && returnTags[0].doc) {
-    lines.push(`**Returns** — ${returnTags[0].doc.trim()}`);
-    lines.push("");
-  }
-
-  return lines.join("\n");
-}
-
-function renderTypeAlias(name: string, decl: Declaration): string {
-  const lines: string[] = [];
-  lines.push(`### \`${name}\``);
-  lines.push("");
-  if (decl.jsDoc?.doc) {
-    lines.push(decl.jsDoc.doc.trim());
-    lines.push("");
-  }
-  lines.push("```ts");
-  lines.push(`type ${name} = ${renderType(decl.def.tsType)};`);
-  lines.push("```");
-  lines.push("");
-  return lines.join("\n");
-}
-
-function renderInterface(name: string, decl: Declaration): string {
-  const lines: string[] = [];
-  lines.push(`### \`${name}\``);
-  lines.push("");
-  if (decl.jsDoc?.doc) {
-    lines.push(decl.jsDoc.doc.trim());
-    lines.push("");
-  }
-  lines.push("```ts");
-  lines.push(`interface ${name} {`);
-  const props: Property[] = decl.def.properties ?? [];
+// deno-lint-ignore no-explicit-any
+function renderInterfaceDecl(name: string, def: any): string {
+  const lines = [`interface ${name} {`];
+  const props: Property[] = def.properties ?? [];
   for (const p of props) {
     const opt = p.optional ? "?" : "";
     const ro = p.readonly ? "readonly " : "";
     lines.push(`  ${ro}${p.name}${opt}: ${renderType(p.tsType)};`);
   }
-  const methods: Method[] = decl.def.methods ?? [];
+  const methods: Method[] = def.methods ?? [];
   for (const m of methods) {
     const params = (m.params ?? []).map(renderParam).join(", ");
     lines.push(`  ${m.name}(${params}): ${renderType(m.returnType)};`);
   }
   lines.push("}");
-  lines.push("```");
-  lines.push("");
   return lines.join("\n");
 }
 
-function renderVariable(name: string, decl: Declaration): string {
-  const lines: string[] = [];
-  lines.push(`### \`${name}\``);
-  lines.push("");
-  if (decl.jsDoc?.doc) {
-    lines.push(decl.jsDoc.doc.trim());
-    lines.push("");
-  }
-  const kind = decl.def.kind ?? "const";
-  lines.push("```ts");
-  lines.push(`${kind} ${name}: ${renderType(decl.def.tsType)};`);
-  lines.push("```");
-  lines.push("");
-  return lines.join("\n");
+function tagsOfKind(jsDoc: JsDoc | undefined, kind: string): JsDocTag[] {
+  return (jsDoc?.tags ?? []).filter((t) => t.kind === kind);
 }
 
-function renderSymbol(sym: DocSymbol): string {
-  const exportedDecls = sym.declarations.filter(
-    (d) => d.declarationKind === "export",
-  );
-  if (exportedDecls.length === 0) return "";
+function summarize(sym: DocSymbol): SymbolSummary[] {
+  const out: SymbolSummary[] = [];
+  for (const decl of sym.declarations) {
+    if (decl.declarationKind !== "export") continue;
+    const doc = decl.jsDoc?.doc?.trim() ?? "";
 
-  const parts: string[] = [];
-  for (const decl of exportedDecls) {
     switch (decl.kind) {
-      case "function":
-        parts.push(renderFunction(sym.name, decl));
+      case "function": {
+        const paramTags = tagsOfKind(decl.jsDoc, "param").map((t) => ({
+          name: t.name ?? "",
+          doc: (t.doc ?? "").trim(),
+        }));
+        const returnTags = [
+          ...tagsOfKind(decl.jsDoc, "return"),
+          ...tagsOfKind(decl.jsDoc, "returns"),
+        ];
+        out.push({
+          kind: "function",
+          name: sym.name,
+          signature: renderFunctionSig(sym.name, decl.def),
+          doc,
+          paramTags,
+          returnsTag: returnTags[0]?.doc?.trim() ?? null,
+        });
         break;
+      }
       case "typeAlias":
-        parts.push(renderTypeAlias(sym.name, decl));
+        out.push({
+          kind: "typeAlias",
+          name: sym.name,
+          declaration: `type ${sym.name} = ${renderType(decl.def.tsType)};`,
+          doc,
+        });
         break;
       case "interface":
-        parts.push(renderInterface(sym.name, decl));
+        out.push({
+          kind: "interface",
+          name: sym.name,
+          declaration: renderInterfaceDecl(sym.name, decl.def),
+          doc,
+        });
         break;
       case "variable":
-        parts.push(renderVariable(sym.name, decl));
+        out.push({
+          kind: "variable",
+          name: sym.name,
+          declaration: `${decl.def.kind ?? "const"} ${sym.name}: ${renderType(decl.def.tsType)};`,
+          doc,
+        });
         break;
       default:
-        parts.push(
-          `### \`${sym.name}\`\n\n_(${decl.kind} — see source)_\n`,
-        );
+        out.push({
+          kind: "other",
+          name: sym.name,
+          declaredKind: decl.kind,
+          doc,
+        });
     }
   }
-  return parts.join("\n");
+  return out;
+}
+
+function renderSymbolMarkdown(s: SymbolSummary): string {
+  switch (s.kind) {
+    case "function": {
+      const lines: string[] = [`### \`${s.signature}\``, ""];
+      if (s.doc) {
+        lines.push(s.doc);
+        lines.push("");
+      }
+      if (s.paramTags.length > 0) {
+        lines.push("**Parameters**");
+        lines.push("");
+        for (const t of s.paramTags) {
+          lines.push(`- \`${t.name}\`${t.doc ? ` — ${t.doc}` : ""}`);
+        }
+        lines.push("");
+      }
+      if (s.returnsTag) {
+        lines.push(`**Returns** — ${s.returnsTag}`);
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+    case "typeAlias":
+    case "interface":
+    case "variable": {
+      const lines: string[] = [`### \`${s.name}\``, ""];
+      if (s.doc) {
+        lines.push(s.doc);
+        lines.push("");
+      }
+      lines.push("```ts");
+      lines.push(s.declaration);
+      lines.push("```");
+      lines.push("");
+      return lines.join("\n");
+    }
+    case "other":
+      return `### \`${s.name}\`\n\n_(${s.declaredKind} — see source)_\n`;
+  }
 }
 
 async function runDenoDoc(file: string): Promise<DocRoot> {
@@ -261,6 +295,46 @@ async function runDenoDoc(file: string): Promise<DocRoot> {
   return JSON.parse(new TextDecoder().decode(stdout));
 }
 
+function renderMarkdown(
+  pkgName: string,
+  entrypoints: EntrypointSummary[],
+): string {
+  const sections: string[] = [];
+  sections.push(`# \`${pkgName}\` API Reference`);
+  sections.push("");
+  sections.push(
+    `_Generated from source by \`scripts/generate-api-docs.ts\` — do not edit by hand. A structured companion is emitted alongside as \`API.json\`. Browsable version on [JSR](https://jsr.io/${pkgName}/doc/all_symbols)._`,
+  );
+  sections.push("");
+
+  for (const ep of entrypoints) {
+    sections.push(`## \`${ep.entrypoint}\``);
+    sections.push("");
+    if (ep.moduleDoc) {
+      sections.push(ep.moduleDoc);
+      sections.push("");
+    }
+    for (const s of ep.symbols) sections.push(renderSymbolMarkdown(s));
+  }
+
+  return sections.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+
+function renderJson(
+  pkgName: string,
+  entrypoints: EntrypointSummary[],
+): string {
+  return JSON.stringify(
+    {
+      package: pkgName,
+      generator: "scripts/generate-api-docs.ts",
+      entrypoints,
+    },
+    null,
+    2,
+  ) + "\n";
+}
+
 async function main(): Promise<void> {
   const denoJson = JSON.parse(await Deno.readTextFile("deno.json")) as {
     name: string;
@@ -268,42 +342,30 @@ async function main(): Promise<void> {
   };
   const pkgName = denoJson.name;
 
-  const sections: string[] = [];
-  sections.push(`# \`${pkgName}\` API Reference`);
-  sections.push("");
-  sections.push(
-    `_Generated from source by \`scripts/generate-api-docs.ts\` — do not edit by hand. Browsable version on [JSR](https://jsr.io/${pkgName}/doc/all_symbols)._`,
-  );
-  sections.push("");
-
+  const entrypoints: EntrypointSummary[] = [];
   for (const [exportPath, file] of Object.entries(denoJson.exports)) {
-    const entryName = `${pkgName}${exportPath.slice(1)}`;
+    const entrypoint = `${pkgName}${exportPath.slice(1)}`;
     const root = await runDenoDoc(file);
     const fileNode = Object.values(root.nodes)[0];
     if (!fileNode) continue;
 
-    sections.push(`## \`${entryName}\``);
-    sections.push("");
-    if (fileNode.module_doc?.doc) {
-      sections.push(fileNode.module_doc.doc.trim());
-      sections.push("");
-    }
-
-    const exported = (fileNode.symbols ?? [])
-      .filter((s) =>
-        s.declarations.some((d) => d.declarationKind === "export")
-      )
+    const symbols = (fileNode.symbols ?? [])
+      .flatMap(summarize)
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
-    for (const sym of exported) {
-      const rendered = renderSymbol(sym);
-      if (rendered.trim()) sections.push(rendered);
-    }
+    entrypoints.push({
+      entrypoint,
+      moduleDoc: fileNode.module_doc?.doc?.trim() ?? "",
+      symbols,
+    });
   }
 
-  const out = sections.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
-  await Deno.writeTextFile("API.md", out);
-  console.error(`Wrote API.md (${out.length} bytes)`);
+  const md = renderMarkdown(pkgName, entrypoints);
+  const json = renderJson(pkgName, entrypoints);
+
+  await Deno.writeTextFile("API.md", md);
+  await Deno.writeTextFile("API.json", json);
+  console.error(`Wrote API.md (${md.length} bytes), API.json (${json.length} bytes)`);
 }
 
 await main();
