@@ -480,6 +480,24 @@ Deno.test("calculateOrderTotals flat transaction fee", () => {
   assertEquals(result.total, 110); // 100 + 0 + 10
 });
 
+Deno.test("calculateOrderTotals includes replacement_total", () => {
+  const items = [
+    makeItem({ quantity: 1 }, { replacement: 500, taxes: [{ uid: "chi-sales-tax" }] }),
+    makeItem({ quantity: 2 }, { replacement: 300 }),
+  ];
+  const result = calculateOrderTotals(items, TAXES);
+  // replacement subtotal = 500 + 600 = 1100
+  // replacement tax = 500 * 0.1025 = 51.25
+  // replacement total = 1100 + 51.25 = 1151.25
+  assertEquals(result.replacement_total, 1151.25);
+});
+
+Deno.test("calculateOrderTotals replacement_total is 0 when no replacement values", () => {
+  const items = [makeItem(), makeItem()];
+  const result = calculateOrderTotals(items, TAXES);
+  assertEquals(result.replacement_total, 0);
+});
+
 // ── Order inspection helpers ─────────────────────────────────────
 
 Deno.test("orderHasRentals detects rental items", () => {

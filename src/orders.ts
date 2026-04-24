@@ -516,6 +516,8 @@ export function calculateOrderTotals(
     feeSum = feeSum.add(entry.amount);
   }
 
+  const replacement = calculateReplacementTotals(items, taxes);
+
   return {
     discount_amount,
     subtotal: subtotal.value,
@@ -523,6 +525,7 @@ export function calculateOrderTotals(
     taxes: taxTotals,
     transaction_fees,
     total: currency(subtotal_discounted).add(taxSum).add(feeSum).value,
+    replacement_total: replacement.total,
   };
 }
 
