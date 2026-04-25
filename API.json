@@ -3,6 +3,78 @@
   "generator": "scripts/generate-api-docs.ts",
   "entrypoints": [
     {
+      "entrypoint": "@cfs/utilities/bookings",
+      "moduleDoc": "Pure helpers over the booking breakdown shape and the order's denormalized\nroll-up. Used both server-side (api-cloudrun) and client-side (manager) so\nthe warehouse picker sees instant optimistic updates and the order detail\npage can compute \"is this order done?\" without a round-trip.\n\n```ts\nimport {\n  sumBookingBreakdown,\n  isOrderBookingsBreakdownClosed,\n  mergeBookingBreakdown,\n} from \"@cfs/utilities/bookings\";\n```",
+      "symbols": [
+        {
+          "kind": "variable",
+          "name": "BOOKING_BREAKDOWN_KEYS",
+          "declaration": "const BOOKING_BREAKDOWN_KEYS: \"quoted\" | \"reserved\" | \"prepped\" | \"out\" | \"returned\" | \"lost\" | \"damaged\"[];",
+          "doc": "All seven keys of the booking lifecycle breakdown. Order matches the schema."
+        },
+        {
+          "kind": "variable",
+          "name": "BOOKING_BREAKDOWN_OPEN_KEYS",
+          "declaration": "const BOOKING_BREAKDOWN_OPEN_KEYS: \"quoted\" | \"reserved\" | \"prepped\" | \"out\"[];",
+          "doc": "Keys representing items that are still in flight (pre-terminal)."
+        },
+        {
+          "kind": "variable",
+          "name": "BOOKING_BREAKDOWN_TERMINAL_KEYS",
+          "declaration": "const BOOKING_BREAKDOWN_TERMINAL_KEYS: \"returned\" | \"lost\" | \"damaged\"[];",
+          "doc": "Keys representing items that have reached a terminal state."
+        },
+        {
+          "kind": "function",
+          "name": "applyBookingBreakdownDelta",
+          "signature": "applyBookingBreakdownDelta(orderBreakdown: indexedAccess, prev: indexedAccess, next: indexedAccess): void",
+          "doc": "Apply a per-key delta to an order's bookings_breakdown roll-up in place.\n\nGiven a booking's previous and next breakdown, mutate the order roll-up by\n`+= next[k] - prev[k]` for each key. Useful both server-side (where\n`updateBooking` applies a single-doc delta to avoid reading every sibling\nbooking) and client-side (where the manager can apply the same delta\nlocally for instant feedback).",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "emptyBookingsBreakdown",
+          "signature": "emptyBookingsBreakdown(): indexedAccess",
+          "doc": "The empty breakdown shape — all seven keys at zero.\n\nUse as the seed for new orders and as the target shape for fresh bookings.\n\n```ts\nconst order = { ...orderInput, bookings_breakdown: emptyBookingsBreakdown() };\n```",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "isOrderBookingsBreakdownClosed",
+          "signature": "isOrderBookingsBreakdownClosed(orderBreakdown: indexedAccess): boolean",
+          "doc": "Predicate: is the order fully closed?\n\nAn order is closed when no quantity is in a non-terminal state\n(`quoted + reserved + prepped + out === 0`) AND at least one booking has\nbeen recorded (`total > 0`). The total guard prevents auto-completing an\nempty order whose bookings_breakdown is all zeros simply because it has no\nbookings yet.\n\nDrives the auto-cascade rule in `update-booking`: when this predicate\nflips to true after applying a delta, the order's status is set to\n\"complete\" in the same Firestore transaction.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "mergeBookingBreakdown",
+          "signature": "mergeBookingBreakdown(current: indexedAccess, patch: Partial<indexedAccess> | undefined): indexedAccess",
+          "doc": "Merge a `Partial<breakdown>` over a current breakdown. Missing keys are\ninherited from `current`. Useful for the optimistic UI path: a picker\ntypes \"returned: 1, out: 2\" and the manager renders the merged result\nbefore the API confirms.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "sumBookingBreakdown",
+          "signature": "sumBookingBreakdown(b: indexedAccess): number",
+          "doc": "Sum the seven values of a single booking's breakdown.\n\nThe booking-level invariant is `sumBookingBreakdown(booking.breakdown) === booking.quantity`.\nUse this to verify that a proposed breakdown change preserves the invariant\nbefore submitting it through `PUT /bookings/{uid}`.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "sumBookingsBreakdown",
+          "signature": "sumBookingsBreakdown(bookings: Array<typeLiteral>): indexedAccess",
+          "doc": "Sum a list of booking breakdowns into the order's roll-up shape.\n\nMirrors the keys of `stock-summaries.bookings_breakdown` (which aggregates\nalong the *product* axis) but aggregated along the *order* axis. Used to\nseed `order.bookings_breakdown` at create/update time and to recompute it\nclient-side from cached bookings when the order doc isn't authoritative\nyet.",
+          "paramTags": [],
+          "returnsTag": null
+        }
+      ]
+    },
+    {
       "entrypoint": "@cfs/utilities/dates",
       "moduleDoc": "Pure date helper functions for CFS applications.\nAll functions accept holidays as a parameter to enable client-side calculations.\n\n```ts\nimport { formatChargeDays, countCfsBusinessDays } from \"@cfs/utilities/dates\";\n\nconst result = formatChargeDays(10);\nconsole.log(result.periodLabel); // \"2 weeks\"\n\nconst start = new Date(\"2025-01-06\");\nconst end = new Date(\"2025-01-10\");\nconst days = countCfsBusinessDays(start, end, []);\nconsole.log(days.days); // 5\n```\n\nPublished in lockstep with `@cfs/schemas` — version bumps track the\nschemas package so consumers pin one pair of beta versions without\nresolving dual shapes (Card.recurrence_overrides, Recurrence collection\nrollout, etc.).",
       "symbols": [

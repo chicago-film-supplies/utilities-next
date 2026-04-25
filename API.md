@@ -2,6 +2,104 @@
 
 _Generated from source by `scripts/generate-api-docs.ts` — do not edit by hand. A structured companion is emitted alongside as `API.json`. Browsable version on [JSR](https://jsr.io/@cfs/utilities/doc/all_symbols)._
 
+## `@cfs/utilities/bookings`
+
+Pure helpers over the booking breakdown shape and the order's denormalized
+roll-up. Used both server-side (api-cloudrun) and client-side (manager) so
+the warehouse picker sees instant optimistic updates and the order detail
+page can compute "is this order done?" without a round-trip.
+
+```ts
+import {
+  sumBookingBreakdown,
+  isOrderBookingsBreakdownClosed,
+  mergeBookingBreakdown,
+} from "@cfs/utilities/bookings";
+```
+
+### `BOOKING_BREAKDOWN_KEYS`
+
+All seven keys of the booking lifecycle breakdown. Order matches the schema.
+
+```ts
+const BOOKING_BREAKDOWN_KEYS: "quoted" | "reserved" | "prepped" | "out" | "returned" | "lost" | "damaged"[];
+```
+
+### `BOOKING_BREAKDOWN_OPEN_KEYS`
+
+Keys representing items that are still in flight (pre-terminal).
+
+```ts
+const BOOKING_BREAKDOWN_OPEN_KEYS: "quoted" | "reserved" | "prepped" | "out"[];
+```
+
+### `BOOKING_BREAKDOWN_TERMINAL_KEYS`
+
+Keys representing items that have reached a terminal state.
+
+```ts
+const BOOKING_BREAKDOWN_TERMINAL_KEYS: "returned" | "lost" | "damaged"[];
+```
+
+### `applyBookingBreakdownDelta(orderBreakdown: indexedAccess, prev: indexedAccess, next: indexedAccess): void`
+
+Apply a per-key delta to an order's bookings_breakdown roll-up in place.
+
+Given a booking's previous and next breakdown, mutate the order roll-up by
+`+= next[k] - prev[k]` for each key. Useful both server-side (where
+`updateBooking` applies a single-doc delta to avoid reading every sibling
+booking) and client-side (where the manager can apply the same delta
+locally for instant feedback).
+
+### `emptyBookingsBreakdown(): indexedAccess`
+
+The empty breakdown shape — all seven keys at zero.
+
+Use as the seed for new orders and as the target shape for fresh bookings.
+
+```ts
+const order = { ...orderInput, bookings_breakdown: emptyBookingsBreakdown() };
+```
+
+### `isOrderBookingsBreakdownClosed(orderBreakdown: indexedAccess): boolean`
+
+Predicate: is the order fully closed?
+
+An order is closed when no quantity is in a non-terminal state
+(`quoted + reserved + prepped + out === 0`) AND at least one booking has
+been recorded (`total > 0`). The total guard prevents auto-completing an
+empty order whose bookings_breakdown is all zeros simply because it has no
+bookings yet.
+
+Drives the auto-cascade rule in `update-booking`: when this predicate
+flips to true after applying a delta, the order's status is set to
+"complete" in the same Firestore transaction.
+
+### `mergeBookingBreakdown(current: indexedAccess, patch: Partial<indexedAccess> | undefined): indexedAccess`
+
+Merge a `Partial<breakdown>` over a current breakdown. Missing keys are
+inherited from `current`. Useful for the optimistic UI path: a picker
+types "returned: 1, out: 2" and the manager renders the merged result
+before the API confirms.
+
+### `sumBookingBreakdown(b: indexedAccess): number`
+
+Sum the seven values of a single booking's breakdown.
+
+The booking-level invariant is `sumBookingBreakdown(booking.breakdown) === booking.quantity`.
+Use this to verify that a proposed breakdown change preserves the invariant
+before submitting it through `PUT /bookings/{uid}`.
+
+### `sumBookingsBreakdown(bookings: Array<typeLiteral>): indexedAccess`
+
+Sum a list of booking breakdowns into the order's roll-up shape.
+
+Mirrors the keys of `stock-summaries.bookings_breakdown` (which aggregates
+along the *product* axis) but aggregated along the *order* axis. Used to
+seed `order.bookings_breakdown` at create/update time and to recompute it
+client-side from cached bookings when the order doc isn't authoritative
+yet.
+
 ## `@cfs/utilities/dates`
 
 Pure date helper functions for CFS applications.
