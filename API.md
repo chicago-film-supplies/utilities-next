@@ -974,6 +974,21 @@ Returns null if required dates are missing.
 Build a display name for a destination pair from its delivery/collection addresses.
 Falls back to "Destination N" when no addresses are present.
 
+### `getDestinationsLegend(destinations: DestinationType[] | undefined | null): typeLiteral`
+
+Pair-derived legend strings for the order's start/end dates.
+
+Each pair contributes a label based on its `customer_collecting` /
+`customer_returning` flags. Labels are deduped and joined with " / ", so
+a mixed-mode order (one pair we deliver, one pair the customer picks up)
+renders as "Pickup / Delivery".
+
+Mapping:
+  start: customer_collecting === true → "Pickup", else → "Delivery"
+  end:   customer_returning  === true → "Return", else → "Pickup"
+
+Empty input returns empty strings.
+
 ### `getGroupItems(items: LineItem[], index: number): LineItem[]`
 
 Collect the child product items belonging to a collapsible section.
