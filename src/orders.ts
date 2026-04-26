@@ -152,6 +152,40 @@ export function getDestinationPairItemName(
 }
 
 /**
+ * Pair-derived legend strings for the order's start/end dates.
+ *
+ * Each pair contributes a label based on its `customer_collecting` /
+ * `customer_returning` flags. Labels are deduped and joined with " / ", so
+ * a mixed-mode order (one pair we deliver, one pair the customer picks up)
+ * renders as "Pickup / Delivery".
+ *
+ * Mapping:
+ *   start: customer_collecting === true → "Pickup", else → "Delivery"
+ *   end:   customer_returning  === true → "Return", else → "Pickup"
+ *
+ * Empty input returns empty strings.
+ */
+export function getDestinationsLegend(
+  destinations: DestinationType[] | undefined | null,
+): { start: string; end: string } {
+  if (!destinations || destinations.length === 0) {
+    return { start: "", end: "" };
+  }
+
+  const startSet = new Set<string>();
+  const endSet = new Set<string>();
+  for (const d of destinations) {
+    startSet.add(d.customer_collecting ? "Pickup" : "Delivery");
+    endSet.add(d.customer_returning ? "Return" : "Pickup");
+  }
+
+  return {
+    start: Array.from(startSet).join(" / "),
+    end: Array.from(endSet).join(" / "),
+  };
+}
+
+/**
  * Compute default chargeable days from order dates and holidays.
  * Returns null if required dates are missing.
  */

@@ -680,8 +680,17 @@ function invoicePairKey(pair: InvoiceDestinationPair): string {
 
 /** Deep-equality check on a pair's endpoint payload, ignoring uid_order. */
 function pairsMatch(a: DocDestinationType, b: DocDestinationType): boolean {
-  return JSON.stringify({ delivery: a.delivery, collection: a.collection })
-    === JSON.stringify({ delivery: b.delivery, collection: b.collection });
+  return JSON.stringify({
+    delivery: a.delivery,
+    collection: a.collection,
+    customer_collecting: a.customer_collecting,
+    customer_returning: a.customer_returning,
+  }) === JSON.stringify({
+    delivery: b.delivery,
+    collection: b.collection,
+    customer_collecting: b.customer_collecting,
+    customer_returning: b.customer_returning,
+  });
 }
 
 /**
@@ -739,10 +748,22 @@ export function syncOrderDestinationsSelective(
 
     if (!inv) {
       // New pair — add tagged with uid_order.
-      synced.push({ uid_order: uidOrder, delivery: newPair.delivery, collection: newPair.collection });
+      synced.push({
+        uid_order: uidOrder,
+        delivery: newPair.delivery,
+        collection: newPair.collection,
+        customer_collecting: newPair.customer_collecting,
+        customer_returning: newPair.customer_returning,
+      });
     } else if (prev && pairsMatch(prev, inv)) {
       // Not overridden — replace with new order pair.
-      synced.push({ uid_order: uidOrder, delivery: newPair.delivery, collection: newPair.collection });
+      synced.push({
+        uid_order: uidOrder,
+        delivery: newPair.delivery,
+        collection: newPair.collection,
+        customer_collecting: newPair.customer_collecting,
+        customer_returning: newPair.customer_returning,
+      });
     } else {
       // Overridden (or prev missing) — keep invoice version.
       synced.push(inv);

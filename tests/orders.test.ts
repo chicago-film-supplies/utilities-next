@@ -27,6 +27,7 @@ import {
   isSameAsDeliveryDates,
   isSameAsDeliveryDestination,
   getDestinationPairItemName,
+  getDestinationsLegend,
   getDefaultChargeDays,
   syncChargeDaysToItems,
   type LineItem,
@@ -972,6 +973,68 @@ Deno.test("getDestinationPairItemName uses delivery when collection has no addre
     collection: {},
   };
   assertEquals(getDestinationPairItemName(dest, 0), "Warehouse");
+});
+
+// ── getDestinationsLegend ───────────────────────────────────────
+
+Deno.test("getDestinationsLegend returns empty strings when no destinations", () => {
+  assertEquals(getDestinationsLegend([]), { start: "", end: "" });
+  assertEquals(getDestinationsLegend(undefined), { start: "", end: "" });
+  assertEquals(getDestinationsLegend(null), { start: "", end: "" });
+});
+
+Deno.test("getDestinationsLegend default flags render Delivery / Pickup", () => {
+  const dest: DestinationType = { delivery: {}, collection: {} };
+  assertEquals(getDestinationsLegend([dest]), { start: "Delivery", end: "Pickup" });
+});
+
+Deno.test("getDestinationsLegend customer-collecting renders Pickup / Pickup", () => {
+  const dest: DestinationType = {
+    delivery: {},
+    collection: {},
+    customer_collecting: true,
+    customer_returning: false,
+  };
+  assertEquals(getDestinationsLegend([dest]), { start: "Pickup", end: "Pickup" });
+});
+
+Deno.test("getDestinationsLegend customer-returning renders Delivery / Return", () => {
+  const dest: DestinationType = {
+    delivery: {},
+    collection: {},
+    customer_collecting: false,
+    customer_returning: true,
+  };
+  assertEquals(getDestinationsLegend([dest]), { start: "Delivery", end: "Return" });
+});
+
+Deno.test("getDestinationsLegend dedupes identical pairs", () => {
+  const dest: DestinationType = {
+    delivery: {},
+    collection: {},
+    customer_collecting: true,
+    customer_returning: true,
+  };
+  assertEquals(getDestinationsLegend([dest, dest]), { start: "Pickup", end: "Return" });
+});
+
+Deno.test("getDestinationsLegend joins mixed pairs with ' / '", () => {
+  const a: DestinationType = {
+    delivery: {},
+    collection: {},
+    customer_collecting: false,
+    customer_returning: false,
+  };
+  const b: DestinationType = {
+    delivery: {},
+    collection: {},
+    customer_collecting: true,
+    customer_returning: true,
+  };
+  assertEquals(getDestinationsLegend([a, b]), {
+    start: "Delivery / Pickup",
+    end: "Pickup / Return",
+  });
 });
 
 // ── getDefaultChargeDays ────────────────────────────────────────

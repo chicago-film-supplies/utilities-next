@@ -695,11 +695,18 @@ Deno.test("computeInvoiceItemPaths produces unique keys for siblings", () => {
 function makePair(
   deliveryUid: string,
   collectionUid: string,
-  overrides: { delivery?: { instructions?: string | null }; collection?: { instructions?: string | null } } = {},
+  overrides: {
+    delivery?: { instructions?: string | null };
+    collection?: { instructions?: string | null };
+    customer_collecting?: boolean;
+    customer_returning?: boolean;
+  } = {},
 ) {
   return {
     delivery: { uid: deliveryUid, address: null, instructions: overrides.delivery?.instructions ?? null, contact: null },
     collection: { uid: collectionUid, address: null, instructions: overrides.collection?.instructions ?? null, contact: null },
+    customer_collecting: overrides.customer_collecting ?? false,
+    customer_returning: overrides.customer_returning ?? false,
   };
 }
 
