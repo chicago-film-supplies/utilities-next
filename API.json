@@ -75,6 +75,20 @@
       ]
     },
     {
+      "entrypoint": "@cfs/utilities/contact-name",
+      "moduleDoc": "Contact name helpers — re-exports the canonical `deriveName` from\n`@cfs/schemas` so manager and other utilities consumers can import it\nfrom a single, stable runtime location.\n\n```ts\nimport { deriveName } from \"@cfs/utilities/contact-name\";\n\nderiveName({ first_name: \"Alex\", last_name: \"Hughes\" }); // \"Alex Hughes\"\nderiveName({ first_name: \"Alex\", pronunciation: \"al-ix\" }); // \"Alex (al-ix)\"\n```\n\nStored documents (Contact, User, Invite, embedded contact refs) carry a\ndenormalized `name` field populated by the server via this helper. Use\n`entity.name` directly when the doc has been read back; only call\n`deriveName` for in-flight objects whose `name` hasn't been server-derived\nyet (e.g. manager-side optimistic state before the API responds).",
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "deriveName",
+          "signature": "deriveName(parts: PartialNameParts): string",
+          "doc": "Canonical join rule for deriving a single display string from name parts.\nJoins `[first_name, middle_name, last_name]` with single spaces (missing\nparts are dropped, never produce empty padding) and appends ` (pronunciation)`\nwhen set. This is the single source of truth — every `name` field on a\nstored document and `ActorRef.name` is computed by passing through here.",
+          "paramTags": [],
+          "returnsTag": null
+        }
+      ]
+    },
+    {
       "entrypoint": "@cfs/utilities/dates",
       "moduleDoc": "Pure date helper functions for CFS applications.\nAll functions accept holidays as a parameter to enable client-side calculations.\n\n```ts\nimport { formatChargeDays, countCfsBusinessDays } from \"@cfs/utilities/dates\";\n\nconst result = formatChargeDays(10);\nconsole.log(result.periodLabel); // \"2 weeks\"\n\nconst start = new Date(\"2025-01-06\");\nconst end = new Date(\"2025-01-10\");\nconst days = countCfsBusinessDays(start, end, []);\nconsole.log(days.days); // 5\n```\n\nPublished in lockstep with `@cfs/schemas` — version bumps track the\nschemas package so consumers pin one pair of beta versions without\nresolving dual shapes (Card.recurrence_overrides, Recurrence collection\nrollout, etc.).",
       "symbols": [

@@ -893,7 +893,7 @@ const baseEndpoint = {
   uid: "loc1",
   address: { city: "Dallas", country_name: "US", full: "123 Main St", name: "Warehouse", postcode: "75001", region: "TX", street: "123 Main St" },
   instructions: "Use back door",
-  contact: { uid: "c1", first_name: "John" },
+  contact: { uid: "c1", first_name: "John", name: "John" },
 };
 
 Deno.test("isSameAsDeliveryDestination returns true when endpoints match", () => {
@@ -915,7 +915,7 @@ Deno.test("isSameAsDeliveryDestination returns false when addresses differ", () 
 Deno.test("isSameAsDeliveryDestination returns false when contacts differ", () => {
   const dest: DestinationType = {
     delivery: { ...baseEndpoint },
-    collection: { ...baseEndpoint, contact: { uid: "c2", first_name: "Jane" } },
+    collection: { ...baseEndpoint, contact: { uid: "c2", first_name: "Jane", name: "Jane" } },
   };
   assertEquals(isSameAsDeliveryDestination(dest), false);
 });
