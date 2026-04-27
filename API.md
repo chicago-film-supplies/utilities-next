@@ -500,19 +500,28 @@ xero_tracking_option_id) are preserved from the existing item.
 
 **Returns** — Rebuilt items with invoice-specific overrides applied
 
-### `computeInvoiceItemPaths(items: InvoiceItem[]): void`
+### `computeInvoiceItemPaths(items: InvoiceItem[]): InvoiceItem[]`
 
 Compute paths for all invoice items, respecting order divider scoping.
 Wraps computeItemPaths — strips divider prefix per scope, delegates
 to the shared order path logic, then re-adds the prefix.
 
-### `computeItemPaths(items: LineItem[]): void`
+Pure: returns a fresh array of fresh items. Inputs are not mutated, so it is
+safe to pass items that originate from a Solid store proxy. Callers should
+replace their working array with the return value.
+
+### `computeItemPaths(items: T[]): T[]`
 
 Compute full structural paths for a flat items array.
 Each item's path = [structural context...] + [component ancestry...] + [self uid].
 
 Client-sent paths carry component ancestry (from ProductComponent.path).
 This function prepends structural context (dest/group) and appends self uid.
+
+Pure: returns a fresh array of fresh items. Inputs are not mutated, so it is
+safe to pass items that originate from a Solid store proxy (the manager app
+routes reordered arrays through this function inside `setEntity` updaters).
+Callers should replace their working array with the return value.
 
 ### `derivePaymentStatus(currentStatus: string, amountPaid: number, amountDue: number): string`
 
@@ -952,13 +961,18 @@ a replacement value on their price object.
 Returns `subtotal` (sum of replacement × quantity), `tax` (taxes applied
 to that subtotal), and `total` (subtotal + tax).
 
-### `computeItemPaths(items: LineItem[]): void`
+### `computeItemPaths(items: T[]): T[]`
 
 Compute full structural paths for a flat items array.
 Each item's path = [structural context...] + [component ancestry...] + [self uid].
 
 Client-sent paths carry component ancestry (from ProductComponent.path).
 This function prepends structural context (dest/group) and appends self uid.
+
+Pure: returns a fresh array of fresh items. Inputs are not mutated, so it is
+safe to pass items that originate from a Solid store proxy (the manager app
+routes reordered arrays through this function inside `setEntity` updaters).
+Callers should replace their working array with the return value.
 
 ### `consolidateItems(lineItems: LineItem[]): ConsolidatedItem[]`
 
