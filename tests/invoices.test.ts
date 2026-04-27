@@ -640,11 +640,11 @@ Deno.test("computeInvoiceItemPaths computes paths within order scopes", () => {
     makeItem({ uid: "p1", path: [] }),
     makeItem({ uid: "p2", path: [] }),
   ];
-  computeInvoiceItemPaths(items);
-  assertEquals(items[0].path, ["od-1"]);
-  assertEquals(items[1].path, ["od-1", "dest-1"]);
-  assertEquals(items[2].path, ["od-1", "dest-1", "p1"]);
-  assertEquals(items[3].path, ["od-1", "dest-1", "p2"]);
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(result[0].path, ["od-1"]);
+  assertEquals(result[1].path, ["od-1", "dest-1"]);
+  assertEquals(result[2].path, ["od-1", "dest-1", "p1"]);
+  assertEquals(result[3].path, ["od-1", "dest-1", "p2"]);
 });
 
 Deno.test("computeInvoiceItemPaths handles multiple order scopes", () => {
@@ -656,13 +656,13 @@ Deno.test("computeInvoiceItemPaths handles multiple order scopes", () => {
     { uid: "dest-2", type: "destination", name: "Venue B", path: [] },
     makeItem({ uid: "p2", path: [] }),
   ];
-  computeInvoiceItemPaths(items);
-  assertEquals(items[0].path, ["od-1"]);
-  assertEquals(items[1].path, ["od-1", "dest-1"]);
-  assertEquals(items[2].path, ["od-1", "dest-1", "p1"]);
-  assertEquals(items[3].path, ["od-2"]);
-  assertEquals(items[4].path, ["od-2", "dest-2"]);
-  assertEquals(items[5].path, ["od-2", "dest-2", "p2"]);
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(result[0].path, ["od-1"]);
+  assertEquals(result[1].path, ["od-1", "dest-1"]);
+  assertEquals(result[2].path, ["od-1", "dest-1", "p1"]);
+  assertEquals(result[3].path, ["od-2"]);
+  assertEquals(result[4].path, ["od-2", "dest-2"]);
+  assertEquals(result[5].path, ["od-2", "dest-2", "p2"]);
 });
 
 Deno.test("computeInvoiceItemPaths preserves component ancestry", () => {
@@ -672,9 +672,9 @@ Deno.test("computeInvoiceItemPaths preserves component ancestry", () => {
     makeItem({ uid: "parent", path: [] }),
     makeItem({ uid: "child", path: ["parent"] }),
   ];
-  computeInvoiceItemPaths(items);
-  assertEquals(items[2].path, ["od-1", "dest-1", "parent"]);
-  assertEquals(items[3].path, ["od-1", "dest-1", "parent", "child"]);
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(result[2].path, ["od-1", "dest-1", "parent"]);
+  assertEquals(result[3].path, ["od-1", "dest-1", "parent", "child"]);
 });
 
 Deno.test("computeInvoiceItemPaths produces unique keys for siblings", () => {
@@ -684,10 +684,22 @@ Deno.test("computeInvoiceItemPaths produces unique keys for siblings", () => {
     makeItem({ uid: "item-A", path: [] }),
     makeItem({ uid: "item-B", path: [] }),
   ];
-  computeInvoiceItemPaths(items);
-  const keyA = items[2].path.join("/");
-  const keyB = items[3].path.join("/");
+  const result = computeInvoiceItemPaths(items);
+  const keyA = result[2].path.join("/");
+  const keyB = result[3].path.join("/");
   assertEquals(keyA !== keyB, true);
+});
+
+Deno.test("computeInvoiceItemPaths does not mutate input items", () => {
+  const items: InvoiceItem[] = [
+    { ...orderDividerBase, uid: "od-1", name: "Order #1", type: "order", uid_order: "o1" } as InvoiceItem,
+    { uid: "dest-1", type: "destination", name: "Venue", path: [] },
+    makeItem({ uid: "p1", path: [] }),
+  ];
+  const original = items[2];
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(original.path, []);
+  assertEquals(result[2].path, ["od-1", "dest-1", "p1"]);
 });
 
 // ── Top-level field sync helpers ────────────────────────────────

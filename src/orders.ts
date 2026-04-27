@@ -673,21 +673,24 @@ export function getParentProductUid(item: LineItem, structuralUids: Set<string>)
  *
  * Client-sent paths carry component ancestry (from ProductComponent.path).
  * This function prepends structural context (dest/group) and appends self uid.
+ *
+ * Pure: returns a fresh array of fresh items. Inputs are not mutated, so it is
+ * safe to pass items that originate from a Solid store proxy (the manager app
+ * routes reordered arrays through this function inside `setEntity` updaters).
+ * Callers should replace their working array with the return value.
  */
-export function computeItemPaths(items: LineItem[]): void {
+export function computeItemPaths<T extends LineItem>(items: T[]): T[] {
   let currentDestUid: string | null = null;
   let currentGroupUid: string | null = null;
-  for (const item of items) {
+  return items.map((item) => {
     if (item.type === "destination") {
       currentDestUid = item.uid;
       currentGroupUid = null;
-      item.path = [item.uid];
-      continue;
+      return { ...item, path: [item.uid] };
     }
     if (item.type === "group") {
       currentGroupUid = item.uid;
-      item.path = currentDestUid ? [currentDestUid, item.uid] : [item.uid];
-      continue;
+      return { ...item, path: currentDestUid ? [currentDestUid, item.uid] : [item.uid] };
     }
     // Line items: structural prefix + component ancestry + self uid
     const prefix: string[] = [];
@@ -697,8 +700,8 @@ export function computeItemPaths(items: LineItem[]): void {
     const clientPath = (item.path ?? []).filter(
       (seg) => seg !== currentDestUid && seg !== currentGroupUid && seg !== item.uid,
     );
-    item.path = [...prefix, ...clientPath, item.uid];
-  }
+    return { ...item, path: [...prefix, ...clientPath, item.uid] };
+  });
 }
 
 // ── Item consolidation and destination grouping ──────────────────

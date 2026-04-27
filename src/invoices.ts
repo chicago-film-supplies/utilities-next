@@ -480,36 +480,49 @@ export function syncOrderToInvoiceSelective(
  * Compute paths for all invoice items, respecting order divider scoping.
  * Wraps computeItemPaths — strips divider prefix per scope, delegates
  * to the shared order path logic, then re-adds the prefix.
+ *
+ * Pure: returns a fresh array of fresh items. Inputs are not mutated, so it is
+ * safe to pass items that originate from a Solid store proxy. Callers should
+ * replace their working array with the return value.
  */
-export function computeInvoiceItemPaths(items: InvoiceItem[]): void {
+export function computeInvoiceItemPaths(items: InvoiceItem[]): InvoiceItem[] {
+  const out: InvoiceItem[] = new Array(items.length);
   let currentDividerUid: string | null = null;
   let scopeStart = -1;
+
+  function flushScope(endExclusive: number) {
+    if (!currentDividerUid || scopeStart < 0) return;
+    const stripped = items.slice(scopeStart, endExclusive).map((si) => ({
+      ...si,
+      path: stripOrderPrefix(si.path, currentDividerUid as string),
+    }));
+    const computed = computeItemPaths(stripped as unknown as LineItem[]) as unknown as InvoiceItem[];
+    for (let j = 0; j < computed.length; j++) {
+      const si = computed[j];
+      out[scopeStart + j] = { ...si, path: [currentDividerUid as string, ...si.path] };
+    }
+  }
 
   for (let i = 0; i <= items.length; i++) {
     const item = i < items.length ? items[i] : null;
     const isNewScope = !item || item.type === "order";
 
-    if (isNewScope && currentDividerUid && scopeStart >= 0) {
-      // Process the completed scope
-      const scopedItems = items.slice(scopeStart, i);
-      // Strip divider prefix
-      for (const si of scopedItems) {
-        si.path = stripOrderPrefix(si.path, currentDividerUid);
-      }
-      // Delegate to shared order path computation
-      computeItemPaths(scopedItems as unknown as LineItem[]);
-      // Re-add divider prefix
-      for (const si of scopedItems) {
-        si.path = [currentDividerUid, ...si.path];
-      }
-    }
+    if (isNewScope) flushScope(i);
 
     if (item?.type === "order") {
       currentDividerUid = item.uid;
-      item.path = [item.uid];
+      out[i] = { ...item, path: [item.uid] };
       scopeStart = i + 1;
     }
   }
+
+  // Items outside any order scope (before the first divider) carry through
+  // unchanged — preserves prior semantics for invoices without dividers.
+  for (let i = 0; i < items.length; i++) {
+    if (out[i] === undefined) out[i] = items[i];
+  }
+
+  return out;
 }
 
 // ── Order-scoped item sync ──────────────────────────────────────

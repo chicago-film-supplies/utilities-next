@@ -1099,8 +1099,8 @@ Deno.test("computeItemPaths sets dest path to [self uid]", () => {
   const items: LineItem[] = [
     { type: "destination", uid: "d1", name: "", path: [] },
   ];
-  computeItemPaths(items);
-  assertEquals(items[0].path, ["d1"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[0].path, ["d1"]);
 });
 
 Deno.test("computeItemPaths sets group path to [dest, self]", () => {
@@ -1108,8 +1108,8 @@ Deno.test("computeItemPaths sets group path to [dest, self]", () => {
     { type: "destination", uid: "d1", name: "", path: [] },
     { type: "group", uid: "g1", name: "G1", path: [] },
   ];
-  computeItemPaths(items);
-  assertEquals(items[1].path, ["d1", "g1"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[1].path, ["d1", "g1"]);
 });
 
 Deno.test("computeItemPaths sets line item path to [dest, self]", () => {
@@ -1117,8 +1117,8 @@ Deno.test("computeItemPaths sets line item path to [dest, self]", () => {
     { type: "destination", uid: "d1", name: "", path: [] },
     makeItem({ uid: "item-1", path: [] }),
   ];
-  computeItemPaths(items);
-  assertEquals(items[1].path, ["d1", "item-1"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[1].path, ["d1", "item-1"]);
 });
 
 Deno.test("computeItemPaths sets line item under group to [dest, group, self]", () => {
@@ -1127,8 +1127,8 @@ Deno.test("computeItemPaths sets line item under group to [dest, group, self]", 
     { type: "group", uid: "g1", name: "G1", path: [] },
     makeItem({ uid: "item-1", path: [] }),
   ];
-  computeItemPaths(items);
-  assertEquals(items[2].path, ["d1", "g1", "item-1"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[2].path, ["d1", "g1", "item-1"]);
 });
 
 Deno.test("computeItemPaths preserves component ancestry from client path", () => {
@@ -1138,10 +1138,10 @@ Deno.test("computeItemPaths preserves component ancestry from client path", () =
     makeItem({ uid: "A", path: ["D"] }),
     makeItem({ uid: "B", path: ["D", "A"] }),
   ];
-  computeItemPaths(items);
-  assertEquals(items[1].path, ["d1", "D"]);
-  assertEquals(items[2].path, ["d1", "D", "A"]);
-  assertEquals(items[3].path, ["d1", "D", "A", "B"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[1].path, ["d1", "D"]);
+  assertEquals(result[2].path, ["d1", "D", "A"]);
+  assertEquals(result[3].path, ["d1", "D", "A", "B"]);
 });
 
 Deno.test("computeItemPaths handles shared component at different paths", () => {
@@ -1153,9 +1153,9 @@ Deno.test("computeItemPaths handles shared component at different paths", () => 
     makeItem({ uid: "C", path: ["D"] }),
     makeItem({ uid: "B", path: ["D", "C"] }),
   ];
-  computeItemPaths(items);
-  assertEquals(items[3].path, ["d1", "D", "A", "B"]);
-  assertEquals(items[5].path, ["d1", "D", "C", "B"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[3].path, ["d1", "D", "A", "B"]);
+  assertEquals(result[5].path, ["d1", "D", "C", "B"]);
 });
 
 Deno.test("computeItemPaths resets group context at new destination", () => {
@@ -1166,9 +1166,9 @@ Deno.test("computeItemPaths resets group context at new destination", () => {
     { type: "destination", uid: "d2", name: "", path: [] },
     makeItem({ uid: "p2", path: [] }),
   ];
-  computeItemPaths(items);
-  assertEquals(items[2].path, ["d1", "g1", "p1"]);
-  assertEquals(items[4].path, ["d2", "p2"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[2].path, ["d1", "g1", "p1"]);
+  assertEquals(result[4].path, ["d2", "p2"]);
 });
 
 Deno.test("computeItemPaths strips duplicate structural/self uids from client path", () => {
@@ -1176,8 +1176,8 @@ Deno.test("computeItemPaths strips duplicate structural/self uids from client pa
     { type: "destination", uid: "d1", name: "", path: [] },
     makeItem({ uid: "item-1", path: ["d1", "item-1"] }),
   ];
-  computeItemPaths(items);
-  assertEquals(items[1].path, ["d1", "item-1"]);
+  const result = computeItemPaths(items);
+  assertEquals(result[1].path, ["d1", "item-1"]);
 });
 
 Deno.test("computeItemPaths produces unique keys for sibling items", () => {
@@ -1186,12 +1186,25 @@ Deno.test("computeItemPaths produces unique keys for sibling items", () => {
     makeItem({ uid: "item-A", path: [] }),
     makeItem({ uid: "item-B", path: [] }),
   ];
-  computeItemPaths(items);
-  const keyA = items[1].path.join("/");
-  const keyB = items[2].path.join("/");
+  const result = computeItemPaths(items);
+  const keyA = result[1].path.join("/");
+  const keyB = result[2].path.join("/");
   assertEquals(keyA !== keyB, true);
   assertEquals(keyA, "d1/item-A");
   assertEquals(keyB, "d1/item-B");
+});
+
+Deno.test("computeItemPaths does not mutate input items", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "item-1", path: [] }),
+  ];
+  const original = items[1];
+  const result = computeItemPaths(items);
+  assertEquals(original.path, []);
+  assertEquals(result[1].path, ["d1", "item-1"]);
+  // Each returned item is a fresh reference
+  assertEquals(result[1] === original, false);
 });
 
 // ── getStructuralUids ───────────────────────────────────────────
