@@ -619,7 +619,7 @@ Deno.test("getGroupPath finds destination and group", () => {
   ];
   const result = getGroupPath(items, 2);
   assertEquals(result.destination, "dest-1");
-  assertEquals(result.group, "Camera");
+  assertEquals(result.group, "g1");
   assertEquals(result.product, null); // parent is group (structural), not a product
 });
 

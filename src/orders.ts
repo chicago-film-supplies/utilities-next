@@ -713,7 +713,10 @@ const COLLECTION_TYPES = new Set(["rental"]);
 
 /**
  * Walk backwards from `index` to determine which destination and group
- * an item belongs to.
+ * an item belongs to. `destination` is the destination's `uid_delivery`;
+ * `group` is the group item's `uid` (not its display name) — keying on
+ * uid lets group display names be edited without losing collapse state
+ * or risking collisions between two groups that happen to share a name.
  */
 export function getGroupPath(items: LineItem[], index: number): GroupPath {
   const item = items[index];
@@ -727,7 +730,7 @@ export function getGroupPath(items: LineItem[], index: number): GroupPath {
   for (let i = index - 1; i >= 0; i--) {
     const entry = items[i];
     if (entry.type === "group" && result.group === null) {
-      result.group = entry.name ?? null;
+      result.group = entry.uid ?? null;
     }
     if (entry.type === "destination") {
       result.destination = entry.uid_delivery ?? null;
