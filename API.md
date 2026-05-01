@@ -1010,7 +1010,10 @@ Collect the child product items belonging to a collapsible section.
 ### `getGroupPath(items: LineItem[], index: number): GroupPath`
 
 Walk backwards from `index` to determine which destination and group
-an item belongs to.
+an item belongs to. `destination` is the destination's `uid_delivery`;
+`group` is the group item's `uid` (not its display name) — keying on
+uid lets group display names be edited without losing collapse state
+or risking collisions between two groups that happen to share a name.
 
 ### `getGroupTotals(items: LineItem[], index: number, taxes: Tax[]): GroupTotalsResult`
 

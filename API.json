@@ -900,7 +900,7 @@
           "kind": "function",
           "name": "getGroupPath",
           "signature": "getGroupPath(items: LineItem[], index: number): GroupPath",
-          "doc": "Walk backwards from `index` to determine which destination and group\nan item belongs to.",
+          "doc": "Walk backwards from `index` to determine which destination and group\nan item belongs to. `destination` is the destination's `uid_delivery`;\n`group` is the group item's `uid` (not its display name) — keying on\nuid lets group display names be edited without losing collapse state\nor risking collisions between two groups that happen to share a name.",
           "paramTags": [],
           "returnsTag": null
         },
