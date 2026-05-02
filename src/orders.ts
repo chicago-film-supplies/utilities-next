@@ -723,7 +723,12 @@ export interface ItemPathIssue {
  * `items` through `computeItemPaths` first, so a non-empty result here means
  * the client skipped the recompute step.
  *
- * Returns `[]` when every path is clean.
+ * Reports per-index mismatches; under the depth-first contiguity invariant,
+ * an index whose `uid` doesn't match the recomputed array's uid at the same
+ * index is also a violation (the array needs re-linearization). The original
+ * path is reported so the caller can diff against `expected`.
+ *
+ * Returns `[]` when every path is clean and order is canonical.
  */
 export function validateItemPaths<T extends LineItem>(items: T[]): ItemPathIssue[] {
   const recomputed = computeItemPaths(items);
@@ -731,7 +736,9 @@ export function validateItemPaths<T extends LineItem>(items: T[]): ItemPathIssue
   for (let i = 0; i < items.length; i++) {
     const original = items[i].path ?? [];
     const expected = recomputed[i].path;
+    const orderMismatch = items[i].uid !== recomputed[i].uid;
     if (
+      orderMismatch ||
       original.length !== expected.length ||
       original.some((seg, j) => seg !== expected[j])
     ) {
@@ -742,27 +749,95 @@ export function validateItemPaths<T extends LineItem>(items: T[]): ItemPathIssue
 }
 
 /**
- * Compute full structural paths for a flat items array.
+ * A single uniqueness violation reported by {@link validateItemUniqueness}
+ * (and the invoice-scoped variant in `@cfs/utilities/invoices`).
+ */
+export interface ItemUniquenessIssue {
+  /** Index of the second (offending) occurrence in the array. */
+  index: number;
+  /** The duplicated item's `uid`. */
+  uid: string;
+  /**
+   * Uid of the immediate structural parent (group, destination, or order
+   * divider) or — for components — the parent product line. `null` when the
+   * item is at the top level with no enclosing structural item.
+   */
+  parentUid: string | null;
+  /** Index of the first occurrence sharing the same `(parentUid, uid)`. */
+  firstIndex: number;
+}
+
+/**
+ * Assert that within each items array, no two entries share the same `uid`
+ * AND the same immediate structural parent. The immediate structural parent
+ * is the second-to-last `path` segment (or `null` for items whose path is
+ * just `[self.uid]`).
+ *
+ * This is the uniqueness invariant orders/invoices rely on so that path-based
+ * line identity is unambiguous. Violations indicate a duplicate that should
+ * be merged — `mergeStagedIntoOrder` and the migration script consolidate.
+ *
+ * Returns `[]` when uniqueness holds.
+ */
+export function validateItemUniqueness<T extends LineItem>(items: T[]): ItemUniquenessIssue[] {
+  const seen = new Map<string, number>();
+  const issues: ItemUniquenessIssue[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const path = item.path ?? [];
+    const parentUid = path.length >= 2 ? path[path.length - 2] : null;
+    const key = (parentUid ?? "\0root") + "\0" + item.uid;
+    const firstIndex = seen.get(key);
+    if (firstIndex !== undefined) {
+      issues.push({ index: i, uid: item.uid, parentUid, firstIndex });
+    } else {
+      seen.set(key, i);
+    }
+  }
+  return issues;
+}
+
+/**
+ * Compute full structural paths for a flat items array AND linearize it
+ * depth-first with `zero_priced` items sorted before priced ones inside each
+ * parent's direct-children block.
+ *
  * Each item's path = [structural context...] + [component ancestry...] + [self uid].
  *
  * Client-sent paths carry component ancestry (from ProductComponent.path).
  * This function prepends structural context (dest/group) and appends self uid.
  *
+ * Three transforms in order:
+ *  1. Recompute every item's `path`. Strip ALL structural uids (every dest +
+ *     group currently in the array) and the item's own uid from the
+ *     client-supplied path; also strip orphan ancestor uids — segments that
+ *     don't resolve to any item in the array (e.g. catalog-only intermediate
+ *     kit uids that were never materialized). Then prepend the structural
+ *     prefix and append the item's own uid.
+ *  2. Linearize line items inside each (destination, group) block as a tree:
+ *     each parent product is followed by its full subtree before the next
+ *     sibling. Destination and group dividers stay where they are; only the
+ *     line items between them are reordered.
+ *  3. Within each parent's direct-children, stable-sort `zero_priced === true`
+ *     before others. Drag-drop reorders preserve intra-band order.
+ *
  * Pure: returns a fresh array of fresh items. Inputs are not mutated, so it is
  * safe to pass items that originate from a Solid store proxy (the manager app
  * routes reordered arrays through this function inside `setEntity` updaters).
  * Callers should replace their working array with the return value.
+ *
+ * Post-condition (under the within-parent uniqueness invariant): a parent and
+ * its full subtree occupy a contiguous index range, so `getItemSubtreeRange`
+ * and `getGroupItems` can rely on path-prefix matching alone.
  */
 export function computeItemPaths<T extends LineItem>(items: T[]): T[] {
-  // Strip ALL structural uids (every dest + group in the array) from line
-  // item paths — not just the current ones. After a drag operation, an item's
-  // existing path may carry uids of destinations/groups it briefly passed
-  // through; treating those as legitimate component ancestry inflates the
-  // item's apparent depth and corrupts subtree queries.
   const structuralUids = getStructuralUids(items);
+  const allItemUids = new Set(items.map((i) => i.uid));
+
+  // Pass 1: recompute paths.
   let currentDestUid: string | null = null;
   let currentGroupUid: string | null = null;
-  return items.map((item) => {
+  const withPaths: T[] = items.map((item) => {
     if (item.type === "destination") {
       currentDestUid = item.uid;
       currentGroupUid = null;
@@ -772,17 +847,106 @@ export function computeItemPaths<T extends LineItem>(items: T[]): T[] {
       currentGroupUid = item.uid;
       return { ...item, path: currentDestUid ? [currentDestUid, item.uid] : [item.uid] };
     }
-    // Line items: structural prefix + component ancestry + self uid.
-    // Component ancestry comes from the client-sent path with all structural
-    // uids and self stripped — what's left is the chain of parent product uids.
     const prefix: string[] = [];
     if (currentDestUid) prefix.push(currentDestUid);
     if (currentGroupUid) prefix.push(currentGroupUid);
     const clientPath = (item.path ?? []).filter(
-      (seg) => !structuralUids.has(seg) && seg !== item.uid,
+      (seg) => !structuralUids.has(seg) && seg !== item.uid && allItemUids.has(seg),
     );
     return { ...item, path: [...prefix, ...clientPath, item.uid] };
   });
+
+  // Pass 2 + 3: linearize each contiguous line-item block as a tree, with
+  // zero-priced-first sorting per parent.
+  const result: T[] = [];
+  let i = 0;
+  while (i < withPaths.length) {
+    const item = withPaths[i];
+    if (item.type === "destination" || item.type === "group") {
+      result.push(item);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < withPaths.length && withPaths[j].type !== "destination" && withPaths[j].type !== "group") {
+      j++;
+    }
+    const block = withPaths.slice(i, j);
+    result.push(...linearizeBlockDepthFirst(block, structuralUids));
+    i = j;
+  }
+  return result;
+}
+
+/**
+ * Tree-linearize a contiguous run of line items inside a single
+ * (destination, group) block. Items whose direct parent (the second-to-last
+ * path segment after structural stripping) is another line item in the same
+ * block are emitted immediately after that parent's emission; otherwise they
+ * are emitted at the top level of the block. Each parent's direct-children
+ * block is stable-sorted with `zero_priced === true` first.
+ *
+ * Robust to duplicates: each input item appears in the output exactly once.
+ * If two parents share a uid (a same-product duplicate that should have been
+ * consolidated), all children attach to the first parent in the input order;
+ * the second parent emits as a leaf. This is a graceful-degradation path —
+ * the within-parent uniqueness invariant rules out the case in steady state.
+ */
+function linearizeBlockDepthFirst<T extends LineItem>(block: T[], structuralUids: Set<string>): T[] {
+  if (block.length <= 1) return block.slice();
+
+  const blockUids = new Set(block.map((i) => i.uid));
+  const ROOT = "\0root";
+
+  const childrenByParent = new Map<string, T[]>();
+  for (const item of block) {
+    const parentUid = item.path.at(-2);
+    const key = parentUid && blockUids.has(parentUid) && !structuralUids.has(parentUid)
+      ? parentUid
+      : ROOT;
+    let bucket = childrenByParent.get(key);
+    if (!bucket) {
+      bucket = [];
+      childrenByParent.set(key, bucket);
+    }
+    bucket.push(item);
+  }
+
+  // Stable sort each parent's children: zero-priced first.
+  for (const bucket of childrenByParent.values()) {
+    bucket.sort((a, b) => {
+      const az = a.zero_priced === true ? 0 : 1;
+      const bz = b.zero_priced === true ? 0 : 1;
+      return az - bz;
+    });
+  }
+
+  const result: T[] = [];
+  const emitted = new Set<T>();
+  function emitChildren(parentKey: string) {
+    const bucket = childrenByParent.get(parentKey);
+    if (!bucket) return;
+    for (const child of bucket) {
+      if (emitted.has(child)) continue;
+      emitted.add(child);
+      result.push(child);
+      emitChildren(child.uid);
+    }
+  }
+  emitChildren(ROOT);
+
+  // Catch any items whose parent uid resolved to a non-emitted bucket —
+  // append them at the end so no item is dropped.
+  if (emitted.size < block.length) {
+    for (const item of block) {
+      if (!emitted.has(item)) {
+        emitted.add(item);
+        result.push(item);
+      }
+    }
+  }
+
+  return result;
 }
 
 // ── Item consolidation and destination grouping ──────────────────
@@ -952,6 +1116,16 @@ export function groupByDestination(
 
 /**
  * Collect the child product items belonging to a collapsible section.
+ *
+ * Destination / group: walk forward to the next divider of the same or
+ * outer level, collecting every line item.
+ *
+ * Product: walk only its own contiguous subtree (via `getItemSubtreeRange`)
+ * and return the immediate children (`path.at(-2) === item.uid`). Under the
+ * within-parent uniqueness invariant, `path.at(-2) === uid` is unambiguous
+ * inside the subtree; constraining to the subtree range protects against
+ * accidental cross-parent collisions if an upstream invariant violation
+ * slips through.
  */
 export function getGroupItems(items: LineItem[], index: number): LineItem[] {
   if (!Array.isArray(items) || index < 0 || index >= items.length) return [];
@@ -977,9 +1151,12 @@ export function getGroupItems(items: LineItem[], index: number): LineItem[] {
     return result;
   }
 
-  return items.filter(
-    (i) => i.path.at(-2) === item.uid,
-  );
+  const range = getItemSubtreeRange(items, index);
+  const result: LineItem[] = [];
+  for (let i = range.startIndex + 1; i <= range.endIndex; i++) {
+    if (items[i].path.at(-2) === item.uid) result.push(items[i]);
+  }
+  return result;
 }
 
 /**
@@ -1012,25 +1189,13 @@ export function getRemovalIndices(items: LineItem[], index: number): number[] {
     return indices;
   }
 
-  // Product: self + ALL descendants via path chain
-  const indexSet = new Set([index]);
-  const descendantUids = new Set<string>();
-  if (item.uid) descendantUids.add(item.uid);
-
-  let prevSize = 0;
-  while (descendantUids.size > prevSize) {
-    prevSize = descendantUids.size;
-    for (let i = 0; i < items.length; i++) {
-      if (indexSet.has(i)) continue;
-      const parentUid = items[i].path.at(-2);
-      if (parentUid && descendantUids.has(parentUid)) {
-        indexSet.add(i);
-        if (items[i].uid) descendantUids.add(items[i].uid!);
-      }
-    }
-  }
-
-  return [...indexSet].sort((a, b) => a - b);
+  // Product: self + descendants. Under the depth-first contiguity invariant,
+  // a product's full subtree is the contiguous range from `index` to the last
+  // item whose path extends this item's path.
+  const range = getItemSubtreeRange(items, index);
+  const result: number[] = [];
+  for (let i = range.startIndex; i <= range.endIndex; i++) result.push(i);
+  return result;
 }
 
 /** Count and pricing totals for a collapsed destination or group section. */

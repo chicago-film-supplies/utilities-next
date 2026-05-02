@@ -26,6 +26,7 @@ export {
   isPreTaxItem,
   isTransactionFeeItem,
   type ItemPathIssue,
+  type ItemUniquenessIssue,
   type LineItem,
   type PriceModifier,
   type PriceObject,
@@ -36,6 +37,7 @@ export {
   type TransactionFeeLineItem,
   type PriceableLineItem,
   validateItemPaths,
+  validateItemUniqueness,
 } from "./orders.ts";
 
 import currency from "currency.js";
@@ -49,9 +51,11 @@ import {
   isPreTaxItem,
   isTransactionFeeItem,
   type ItemPathIssue,
+  type ItemUniquenessIssue,
   type LineItem,
   type PriceObject,
   type Tax,
+  validateItemUniqueness,
 } from "./orders.ts";
 
 // ── Structural helpers ──────────────────────────────────────────
@@ -535,9 +539,12 @@ export function computeInvoiceItemPaths(items: InvoiceItem[]): InvoiceItem[] {
  *
  * Use as a defensive write-time invariant: any client that writes invoices
  * should pipe `items` through `computeInvoiceItemPaths` first, so a non-empty
- * result here means the client skipped the recompute step.
+ * result here means the client skipped the recompute step. Also flags index
+ * positions whose `uid` doesn't match the recomputed array's uid at the same
+ * index — under depth-first contiguity, a uid mismatch means the array needs
+ * re-linearization.
  *
- * Returns `[]` when every path is clean.
+ * Returns `[]` when every path is clean and order is canonical.
  */
 export function validateInvoiceItemPaths<T extends InvoiceItem>(items: T[]): ItemPathIssue[] {
   const recomputed = computeInvoiceItemPaths(items as unknown as InvoiceItem[]);
@@ -545,7 +552,9 @@ export function validateInvoiceItemPaths<T extends InvoiceItem>(items: T[]): Ite
   for (let i = 0; i < items.length; i++) {
     const original = items[i].path ?? [];
     const expected = recomputed[i].path;
+    const orderMismatch = items[i].uid !== recomputed[i].uid;
     if (
+      orderMismatch ||
       original.length !== expected.length ||
       original.some((seg, j) => seg !== expected[j])
     ) {
@@ -553,6 +562,27 @@ export function validateInvoiceItemPaths<T extends InvoiceItem>(items: T[]): Ite
     }
   }
   return issues;
+}
+
+/**
+ * Within-parent uniqueness check for invoice items.
+ *
+ * Reuses {@link validateItemUniqueness}'s logic — the parent uid is the
+ * second-to-last `path` segment, which for invoice items naturally captures
+ * each scope:
+ *  - top-level destination/group/product under an order divider →
+ *    parentUid is the order divider uid (first segment),
+ *  - product under a destination → parentUid is the destination uid,
+ *  - product under a group → parentUid is the group uid,
+ *  - component → parentUid is the parent product line uid.
+ *
+ * So the `(parentUid, uid)` key naturally scopes per order divider for
+ * top-level entries, and per parent product for nested ones.
+ *
+ * Returns `[]` when uniqueness holds.
+ */
+export function validateInvoiceItemUniqueness<T extends InvoiceItem>(items: T[]): ItemUniquenessIssue[] {
+  return validateItemUniqueness(items as unknown as LineItem[]);
 }
 
 // ── Order-scoped item sync ──────────────────────────────────────

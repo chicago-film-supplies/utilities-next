@@ -12,6 +12,7 @@ import {
   computeItemPaths,
   consolidateItems,
   validateItemPaths,
+  validateItemUniqueness,
   getGroupItems,
   getGroupPath,
   getGroupTotals,
@@ -1331,6 +1332,185 @@ Deno.test("validateItemPaths does not mutate input items", () => {
   const before = items[1].path.slice();
   validateItemPaths(items);
   assertEquals(items[1].path, before);
+});
+
+// ── computeItemPaths: depth-first linearization ────────────────
+
+Deno.test("computeItemPaths linearizes breadth-first input depth-first", () => {
+  // Breadth-first input: parent, all direct children, then all grandchildren.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: [] },
+    makeItem({ uid: "P", path: [] }),
+    makeItem({ uid: "A", path: ["P"] }),
+    makeItem({ uid: "B", path: ["P"] }),
+    makeItem({ uid: "A1", path: ["P", "A"] }),
+    makeItem({ uid: "A2", path: ["P", "A"] }),
+    makeItem({ uid: "B1", path: ["P", "B"] }),
+  ];
+  const result = computeItemPaths(items);
+  // Expected depth-first order: P, A, A1, A2, B, B1
+  assertEquals(result.map((i) => i.uid), ["d1", "g1", "P", "A", "A1", "A2", "B", "B1"]);
+  assertEquals(result[2].path, ["d1", "g1", "P"]);
+  assertEquals(result[3].path, ["d1", "g1", "P", "A"]);
+  assertEquals(result[4].path, ["d1", "g1", "P", "A", "A1"]);
+  assertEquals(result[5].path, ["d1", "g1", "P", "A", "A2"]);
+  assertEquals(result[6].path, ["d1", "g1", "P", "B"]);
+  assertEquals(result[7].path, ["d1", "g1", "P", "B", "B1"]);
+});
+
+Deno.test("computeItemPaths sorts zero-priced before priced within each parent", () => {
+  // Two top-level products under a group, mix of zero-priced and priced.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: [] },
+    makeItem({ uid: "P", path: [] }),
+    makeItem({ uid: "C-priced", path: ["P"], zero_priced: false }),
+    makeItem({ uid: "C-zero1", path: ["P"], zero_priced: true }),
+    makeItem({ uid: "C-priced2", path: ["P"], zero_priced: false }),
+    makeItem({ uid: "C-zero2", path: ["P"], zero_priced: true }),
+  ];
+  const result = computeItemPaths(items);
+  // Zero-priced first (in input order among themselves), then priced (in input order).
+  assertEquals(result.map((i) => i.uid), [
+    "d1", "g1", "P", "C-zero1", "C-zero2", "C-priced", "C-priced2",
+  ]);
+});
+
+Deno.test("computeItemPaths preserves intra-band order on reorder", () => {
+  // Two priced components A, B reordered by drag-drop should stay in that order.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "P", path: [] }),
+    makeItem({ uid: "B", path: ["P"], zero_priced: false }),
+    makeItem({ uid: "A", path: ["P"], zero_priced: false }),
+  ];
+  const result = computeItemPaths(items);
+  assertEquals(result.map((i) => i.uid), ["d1", "P", "B", "A"]);
+});
+
+Deno.test("computeItemPaths strips orphan ancestor uids", () => {
+  // Item path includes an intermediate uid that doesn't resolve to any item
+  // in the array (e.g. catalog-only intermediate kit uid). Strip it.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "P", path: [] }),
+    // urf is not in the array — should be stripped.
+    makeItem({ uid: "leaf", path: ["P", "urf", "leaf"] }),
+  ];
+  const result = computeItemPaths(items);
+  assertEquals(result[2].path, ["d1", "P", "leaf"]);
+});
+
+Deno.test("computeItemPaths reorders independent parent subtrees by zero-priced flag", () => {
+  // Two top-level products inside a group, one zero-priced.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "g1", name: "G1", path: [] },
+    makeItem({ uid: "Priced", path: [], zero_priced: false }),
+    makeItem({ uid: "PricedChild", path: ["Priced"], zero_priced: false }),
+    makeItem({ uid: "Zero", path: [], zero_priced: true }),
+  ];
+  const result = computeItemPaths(items);
+  // Zero comes before Priced; Priced's subtree stays attached.
+  assertEquals(result.map((i) => i.uid), ["d1", "g1", "Zero", "Priced", "PricedChild"]);
+});
+
+Deno.test("computeItemPaths reorders only line items, not divider rows", () => {
+  // Destinations and groups must stay in source position.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    { type: "group", uid: "gA", name: "A", path: [] },
+    makeItem({ uid: "p1", path: [] }),
+    { type: "group", uid: "gB", name: "B", path: [] },
+    makeItem({ uid: "p2", path: [] }),
+    { type: "destination", uid: "d2", name: "", path: [] },
+    makeItem({ uid: "p3", path: [] }),
+  ];
+  const result = computeItemPaths(items);
+  assertEquals(result.map((i) => i.uid), ["d1", "gA", "p1", "gB", "p2", "d2", "p3"]);
+});
+
+Deno.test("computeItemPaths is robust to duplicate parent uids", () => {
+  // Pre-migration state: two same-uid parents in the same block. Each item
+  // must appear in output exactly once; second parent emits as a leaf with
+  // children attached to the first parent's subtree.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "P", path: [] }), // first
+    makeItem({ uid: "C1", path: ["P"] }),
+    makeItem({ uid: "P", path: [] }), // duplicate
+    makeItem({ uid: "C2", path: ["P"] }),
+  ];
+  const result = computeItemPaths(items);
+  assertEquals(result.length, items.length); // every item appears once
+  const uids = result.map((i) => i.uid);
+  assertEquals(uids.filter((u) => u === "P").length, 2);
+  assertEquals(uids.filter((u) => u === "C1").length, 1);
+  assertEquals(uids.filter((u) => u === "C2").length, 1);
+});
+
+// ── validateItemUniqueness ─────────────────────────────────────
+
+Deno.test("validateItemUniqueness returns [] for unique items", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "g1", "p2"] }),
+    makeItem({ uid: "c1", path: ["d1", "g1", "p1", "c1"] }),
+  ];
+  assertEquals(validateItemUniqueness(items), []);
+});
+
+Deno.test("validateItemUniqueness flags duplicate products in same group", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "P", path: ["d1", "g1", "P"] }),
+    makeItem({ uid: "P", path: ["d1", "g1", "P"] }),
+  ];
+  const issues = validateItemUniqueness(items);
+  assertEquals(issues, [
+    { index: 3, uid: "P", parentUid: "g1", firstIndex: 2 },
+  ]);
+});
+
+Deno.test("validateItemUniqueness allows same product in different groups", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "gA", name: "A", path: ["d1", "gA"] },
+    makeItem({ uid: "P", path: ["d1", "gA", "P"] }),
+    { type: "group", uid: "gB", name: "B", path: ["d1", "gB"] },
+    makeItem({ uid: "P", path: ["d1", "gB", "P"] }),
+  ];
+  assertEquals(validateItemUniqueness(items), []);
+});
+
+Deno.test("validateItemUniqueness allows same component on two different parents", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "PA", path: ["d1", "PA"] }),
+    makeItem({ uid: "shared", path: ["d1", "PA", "shared"] }),
+    makeItem({ uid: "PB", path: ["d1", "PB"] }),
+    makeItem({ uid: "shared", path: ["d1", "PB", "shared"] }),
+  ];
+  assertEquals(validateItemUniqueness(items), []);
+});
+
+Deno.test("validateItemUniqueness flags duplicate component under same parent", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "P", path: ["d1", "P"] }),
+    makeItem({ uid: "C", path: ["d1", "P", "C"] }),
+    makeItem({ uid: "C", path: ["d1", "P", "C"] }),
+  ];
+  const issues = validateItemUniqueness(items);
+  assertEquals(issues.length, 1);
+  assertEquals(issues[0].uid, "C");
+  assertEquals(issues[0].parentUid, "P");
+  assertEquals(issues[0].index, 3);
+  assertEquals(issues[0].firstIndex, 2);
 });
 
 // ── getStructuralUids ───────────────────────────────────────────

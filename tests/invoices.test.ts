@@ -22,6 +22,7 @@ import {
   syncOrderToInvoiceSelective,
   syncScalarWithOverride,
   validateInvoiceItemPaths,
+  validateInvoiceItemUniqueness,
 } from "../src/invoices.ts";
 
 // ── Schema bases ────────────────────────────────────────────────
@@ -887,4 +888,41 @@ Deno.test("validateInvoiceItemPaths does not mutate input items", () => {
   const before = items[2].path.slice();
   validateInvoiceItemPaths(items);
   assertEquals(items[2].path, before);
+});
+
+// ── validateInvoiceItemUniqueness ──────────────────────────────
+
+Deno.test("validateInvoiceItemUniqueness returns [] for clean multi-order invoice", () => {
+  // Same-uid line in two different order divider scopes is allowed.
+  assertEquals(validateInvoiceItemUniqueness(multiOrderInvoiceItems), []);
+});
+
+Deno.test("validateInvoiceItemUniqueness flags duplicates within one order divider's scope", () => {
+  const items: InvoiceItem[] = [
+    orderDivider,
+    {
+      uid: "g1",
+      type: "group",
+      name: "G1",
+      description: "",
+      path: ["order-div-1", "g1"],
+    } as InvoiceItem,
+    makeItem({ uid: "P", path: ["order-div-1", "g1", "P"] }),
+    makeItem({ uid: "P", path: ["order-div-1", "g1", "P"] }),
+  ];
+  const issues = validateInvoiceItemUniqueness(items);
+  assertEquals(issues.length, 1);
+  assertEquals(issues[0].uid, "P");
+  assertEquals(issues[0].parentUid, "g1");
+});
+
+Deno.test("validateInvoiceItemUniqueness allows same product in two different order scopes", () => {
+  // Same product line inside order divider 1 and order divider 2 — not a violation.
+  const items: InvoiceItem[] = [
+    orderDivider,
+    makeItem({ uid: "P", path: ["order-div-1", "P"] }),
+    orderDivider2,
+    makeItem({ uid: "P", path: ["order-div-2", "P"] }),
+  ];
+  assertEquals(validateInvoiceItemUniqueness(items), []);
 });
