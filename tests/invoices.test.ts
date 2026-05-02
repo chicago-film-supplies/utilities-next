@@ -21,6 +21,7 @@ import {
   syncOrderItems,
   syncOrderToInvoiceSelective,
   syncScalarWithOverride,
+  validateInvoiceItemPaths,
 } from "../src/invoices.ts";
 
 // ── Schema bases ────────────────────────────────────────────────
@@ -823,4 +824,67 @@ Deno.test("syncObjectWithOverride keeps invoice when compared subset diverges", 
   const invoice = { uid: "org1", name: "manual" };
   const result = syncObjectWithOverride(prev, next, invoice, ["uid", "name"]);
   assertEquals(result, invoice);
+});
+
+// ── validateInvoiceItemPaths ────────────────────────────────────
+
+// Start each test from a baseline normalized through computeInvoiceItemPaths so
+// the test fixture's bare order divider path doesn't mask injected mismatches.
+const cleanInvoiceItems: InvoiceItem[] = computeInvoiceItemPaths(multiOrderInvoiceItems);
+
+Deno.test("validateInvoiceItemPaths returns [] for items just produced by computeInvoiceItemPaths", () => {
+  assertEquals(validateInvoiceItemPaths(cleanInvoiceItems), []);
+});
+
+Deno.test("validateInvoiceItemPaths flags items missing the order divider prefix", () => {
+  // Line item under order-div-1 written without the divider in its path.
+  const items = cleanInvoiceItems.map((it, i) =>
+    i === 2 ? { ...it, path: ["dest-1", "item-1"] } : it
+  );
+  const issues = validateInvoiceItemPaths(items);
+  assertEquals(issues.length, 1);
+  assertEquals(issues[0], {
+    index: 2,
+    uid: "item-1",
+    path: ["dest-1", "item-1"],
+    expected: ["order-div-1", "dest-1", "item-1"],
+  });
+});
+
+Deno.test("validateInvoiceItemPaths flags stale structural uids inside an order scope", () => {
+  // Item carries a leaked structural uid ("dest-2") from a sibling destination
+  // (synthesized inline for this test) it briefly passed through.
+  const staleDest: InvoiceItem = {
+    uid: "dest-2",
+    type: "destination",
+    name: "Other Venue",
+    uid_delivery: "del-2",
+    uid_collection: null,
+    path: ["order-div-1", "dest-2"],
+  };
+  const items: InvoiceItem[] = [
+    cleanInvoiceItems[0], // order-div-1
+    cleanInvoiceItems[1], // dest-1
+    staleDest,
+    { ...cleanInvoiceItems[2], path: ["order-div-1", "dest-1", "dest-2", "item-1"] },
+  ];
+  const issues = validateInvoiceItemPaths(items);
+  assertEquals(issues.length, 1);
+  // After staleDest, the line item's current destination is dest-2 — so the
+  // recomputed path drops both stale dest-1 and the duplicate dest-2 segment.
+  assertEquals(issues[0], {
+    index: 3,
+    uid: "item-1",
+    path: ["order-div-1", "dest-1", "dest-2", "item-1"],
+    expected: ["order-div-1", "dest-2", "item-1"],
+  });
+});
+
+Deno.test("validateInvoiceItemPaths does not mutate input items", () => {
+  const items = cleanInvoiceItems.map((it, i) =>
+    i === 2 ? { ...it, path: ["bogus"] } : it
+  );
+  const before = items[2].path.slice();
+  validateInvoiceItemPaths(items);
+  assertEquals(items[2].path, before);
 });

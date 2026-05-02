@@ -11,6 +11,7 @@ import {
   buildPackingList,
   computeItemPaths,
   consolidateItems,
+  validateItemPaths,
   getGroupItems,
   getGroupPath,
   getGroupTotals,
@@ -1259,6 +1260,77 @@ Deno.test("computeItemPaths is idempotent — running twice equals running once"
   for (let i = 0; i < items.length; i++) {
     assertEquals(twice[i].path, once[i].path);
   }
+});
+
+// ── validateItemPaths ───────────────────────────────────────────
+
+Deno.test("validateItemPaths returns [] for a clean items array", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "c1", path: ["d1", "g1", "p1", "c1"] }),
+  ];
+  assertEquals(validateItemPaths(items), []);
+});
+
+Deno.test("validateItemPaths returns [] for items just produced by computeItemPaths", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: [] },
+    makeItem({ uid: "item-1", path: [] }),
+    makeItem({ uid: "child", path: ["item-1"] }),
+  ];
+  const recomputed = computeItemPaths(items);
+  assertEquals(validateItemPaths(recomputed), []);
+});
+
+Deno.test("validateItemPaths flags every item with a stale structural uid", () => {
+  // Mirror of the "strips stale structural uids" computeItemPaths test, inverted:
+  // input is unfixed, validate should report each leaked path.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "tents", name: "Tents", path: ["d1", "tents"] },
+    makeItem({ uid: "blackTent", path: ["d1", "tents", "hi", "d2", "blackTent"] }),
+    makeItem({ uid: "whiteTent", path: ["d1", "tents", "d2", "whiteTent"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"] },
+    { type: "group", uid: "hi", name: "Hi", path: ["d2", "hi"] },
+  ];
+  const issues = validateItemPaths(items);
+  assertEquals(issues.length, 2);
+  assertEquals(issues[0], {
+    index: 2,
+    uid: "blackTent",
+    path: ["d1", "tents", "hi", "d2", "blackTent"],
+    expected: ["d1", "tents", "blackTent"],
+  });
+  assertEquals(issues[1], {
+    index: 3,
+    uid: "whiteTent",
+    path: ["d1", "tents", "d2", "whiteTent"],
+    expected: ["d1", "tents", "whiteTent"],
+  });
+});
+
+Deno.test("validateItemPaths flags a missing structural prefix", () => {
+  // Line item written without its destination ancestor in the path.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "p1", path: ["p1"] }),
+  ];
+  const issues = validateItemPaths(items);
+  assertEquals(issues, [
+    { index: 1, uid: "p1", path: ["p1"], expected: ["d1", "p1"] },
+  ]);
+});
+
+Deno.test("validateItemPaths does not mutate input items", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "p1", path: ["d1", "stale", "p1"] }),
+  ];
+  const before = items[1].path.slice();
+  validateItemPaths(items);
+  assertEquals(items[1].path, before);
 });
 
 // ── getStructuralUids ───────────────────────────────────────────

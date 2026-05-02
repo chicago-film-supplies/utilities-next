@@ -25,6 +25,7 @@ export {
   isPriceableItem,
   isPreTaxItem,
   isTransactionFeeItem,
+  type ItemPathIssue,
   type LineItem,
   type PriceModifier,
   type PriceObject,
@@ -34,6 +35,7 @@ export {
   type PreTaxLineItem,
   type TransactionFeeLineItem,
   type PriceableLineItem,
+  validateItemPaths,
 } from "./orders.ts";
 
 import currency from "currency.js";
@@ -46,6 +48,7 @@ import {
   getTransactionFeeTotals,
   isPreTaxItem,
   isTransactionFeeItem,
+  type ItemPathIssue,
   type LineItem,
   type PriceObject,
   type Tax,
@@ -524,6 +527,32 @@ export function computeInvoiceItemPaths(items: InvoiceItem[]): InvoiceItem[] {
   }
 
   return out;
+}
+
+/**
+ * Assert every invoice item's `path` matches what {@link computeInvoiceItemPaths}
+ * would produce — the order-divider-scoped variant of {@link computeItemPaths}.
+ *
+ * Use as a defensive write-time invariant: any client that writes invoices
+ * should pipe `items` through `computeInvoiceItemPaths` first, so a non-empty
+ * result here means the client skipped the recompute step.
+ *
+ * Returns `[]` when every path is clean.
+ */
+export function validateInvoiceItemPaths<T extends InvoiceItem>(items: T[]): ItemPathIssue[] {
+  const recomputed = computeInvoiceItemPaths(items as unknown as InvoiceItem[]);
+  const issues: ItemPathIssue[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const original = items[i].path ?? [];
+    const expected = recomputed[i].path;
+    if (
+      original.length !== expected.length ||
+      original.some((seg, j) => seg !== expected[j])
+    ) {
+      issues.push({ index: i, uid: items[i].uid, path: original, expected });
+    }
+  }
+  return issues;
 }
 
 // ── Order-scoped item sync ──────────────────────────────────────

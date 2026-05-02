@@ -358,6 +358,20 @@ interface InvoiceItem {
 type InvoiceTotals = InvoiceDocTotals;
 ```
 
+### `ItemPathIssue`
+
+A single path mismatch reported by {@link validateItemPaths} or
+{@link validateInvoiceItemPaths} (re-exported from `@cfs/utilities/invoices`).
+
+```ts
+interface ItemPathIssue {
+  index: number;
+  uid: string | undefined;
+  path: string[];
+  expected: string[];
+}
+```
+
 ### `LineItem`
 
 A single line item in an order (product, destination, group, surcharge, or fee).
@@ -743,6 +757,30 @@ Values are compared by strict equality (`===`). Both `undefined` and `null`
 participate in the match — a field that was `null` on prev and is `null`
 on the invoice will accept a new non-null order value.
 
+### `validateInvoiceItemPaths(items: T[]): ItemPathIssue[]`
+
+Assert every invoice item's `path` matches what {@link computeInvoiceItemPaths}
+would produce — the order-divider-scoped variant of {@link computeItemPaths}.
+
+Use as a defensive write-time invariant: any client that writes invoices
+should pipe `items` through `computeInvoiceItemPaths` first, so a non-empty
+result here means the client skipped the recompute step.
+
+Returns `[]` when every path is clean.
+
+### `validateItemPaths(items: T[]): ItemPathIssue[]`
+
+Assert every line item's `path` matches what {@link computeItemPaths} would
+produce — i.e. structural prefix + component ancestry + self uid, with no
+stale dest/group uids from prior drag positions.
+
+Use as a defensive write-time invariant: any client (manager, webhook
+handlers, manual firestore_admin pokes) that writes orders should pipe
+`items` through `computeItemPaths` first, so a non-empty result here means
+the client skipped the recompute step.
+
+Returns `[]` when every path is clean.
+
 ## `@cfs/utilities/orders`
 
 Shared order utility functions for CFS applications.
@@ -813,6 +851,20 @@ interface GroupTotalsResult {
   subtotal: number;
   subtotal_discounted: number;
   total: number;
+}
+```
+
+### `ItemPathIssue`
+
+A single path mismatch reported by {@link validateItemPaths} or
+{@link validateInvoiceItemPaths} (re-exported from `@cfs/utilities/invoices`).
+
+```ts
+interface ItemPathIssue {
+  index: number;
+  uid: string | undefined;
+  path: string[];
+  expected: string[];
 }
 ```
 
@@ -1116,6 +1168,19 @@ Check whether any pre-tax line item has taxes applied.
 
 Update chargeable_days on line items that still match the previous default.
 Skips structural items, items without a price, and manual overrides.
+
+### `validateItemPaths(items: T[]): ItemPathIssue[]`
+
+Assert every line item's `path` matches what {@link computeItemPaths} would
+produce — i.e. structural prefix + component ancestry + self uid, with no
+stale dest/group uids from prior drag positions.
+
+Use as a defensive write-time invariant: any client (manager, webhook
+handlers, manual firestore_admin pokes) that writes orders should pipe
+`items` through `computeItemPaths` first, so a non-empty result here means
+the client skipped the recompute step.
+
+Returns `[]` when every path is clean.
 
 ## `@cfs/utilities/products`
 

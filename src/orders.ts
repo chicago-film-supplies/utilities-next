@@ -699,6 +699,49 @@ export function getItemSubtreeRange<T extends { path: string[] }>(
 }
 
 /**
+ * A single path mismatch reported by {@link validateItemPaths} or
+ * {@link validateInvoiceItemPaths} (re-exported from `@cfs/utilities/invoices`).
+ */
+export interface ItemPathIssue {
+  /** Index of the offending item in the input array. */
+  index: number;
+  /** The item's `uid` (or `undefined` if missing). */
+  uid: string | undefined;
+  /** The path that was actually persisted on the item. */
+  path: string[];
+  /** The path that {@link computeItemPaths} would produce for this item. */
+  expected: string[];
+}
+
+/**
+ * Assert every line item's `path` matches what {@link computeItemPaths} would
+ * produce — i.e. structural prefix + component ancestry + self uid, with no
+ * stale dest/group uids from prior drag positions.
+ *
+ * Use as a defensive write-time invariant: any client (manager, webhook
+ * handlers, manual firestore_admin pokes) that writes orders should pipe
+ * `items` through `computeItemPaths` first, so a non-empty result here means
+ * the client skipped the recompute step.
+ *
+ * Returns `[]` when every path is clean.
+ */
+export function validateItemPaths<T extends LineItem>(items: T[]): ItemPathIssue[] {
+  const recomputed = computeItemPaths(items);
+  const issues: ItemPathIssue[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const original = items[i].path ?? [];
+    const expected = recomputed[i].path;
+    if (
+      original.length !== expected.length ||
+      original.some((seg, j) => seg !== expected[j])
+    ) {
+      issues.push({ index: i, uid: items[i].uid, path: original, expected });
+    }
+  }
+  return issues;
+}
+
+/**
  * Compute full structural paths for a flat items array.
  * Each item's path = [structural context...] + [component ancestry...] + [self uid].
  *

@@ -263,6 +263,12 @@
         },
         {
           "kind": "interface",
+          "name": "ItemPathIssue",
+          "declaration": "interface ItemPathIssue {\n  index: number;\n  uid: string | undefined;\n  path: string[];\n  expected: string[];\n}",
+          "doc": "A single path mismatch reported by {@link validateItemPaths} or\n{@link validateInvoiceItemPaths} (re-exported from `@cfs/utilities/invoices`)."
+        },
+        {
+          "kind": "interface",
           "name": "LineItem",
           "declaration": "interface LineItem {\n  uid: string;\n  name: string;\n  type: string;\n  quantity?: number;\n  price?: PriceObject | PriceModifierType;\n  stock_method?: string;\n  path: string[];\n  uid_delivery?: string | null;\n  uid_collection?: string | null;\n  zero_priced?: boolean | null;\n  description?: string;\n  order_number?: number;\n  uid_order?: string | null;\n}",
           "doc": "A single line item in an order (product, destination, group, surcharge, or fee).\nLoose interface compatible with all OrderDocItemType members — utility functions\nuse type guards (isPriceableItem, isTransactionFeeItem) before accessing\nmember-specific fields."
@@ -695,6 +701,22 @@
           "doc": "Scalar co-write with override detection. Returns the new order value if\nthe invoice value still matches the previous order value (i.e. the invoice\nhas not been manually edited on this field); otherwise returns the current\ninvoice value (treated as an override, preserved).\n\nValues are compared by strict equality (`===`). Both `undefined` and `null`\nparticipate in the match — a field that was `null` on prev and is `null`\non the invoice will accept a new non-null order value.",
           "paramTags": [],
           "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "validateInvoiceItemPaths",
+          "signature": "validateInvoiceItemPaths(items: T[]): ItemPathIssue[]",
+          "doc": "Assert every invoice item's `path` matches what {@link computeInvoiceItemPaths}\nwould produce — the order-divider-scoped variant of {@link computeItemPaths}.\n\nUse as a defensive write-time invariant: any client that writes invoices\nshould pipe `items` through `computeInvoiceItemPaths` first, so a non-empty\nresult here means the client skipped the recompute step.\n\nReturns `[]` when every path is clean.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "validateItemPaths",
+          "signature": "validateItemPaths(items: T[]): ItemPathIssue[]",
+          "doc": "Assert every line item's `path` matches what {@link computeItemPaths} would\nproduce — i.e. structural prefix + component ancestry + self uid, with no\nstale dest/group uids from prior drag positions.\n\nUse as a defensive write-time invariant: any client (manager, webhook\nhandlers, manual firestore_admin pokes) that writes orders should pipe\n`items` through `computeItemPaths` first, so a non-empty result here means\nthe client skipped the recompute step.\n\nReturns `[]` when every path is clean.",
+          "paramTags": [],
+          "returnsTag": null
         }
       ]
     },
@@ -731,6 +753,12 @@
           "name": "GroupTotalsResult",
           "declaration": "interface GroupTotalsResult {\n  count: number;\n  subtotal: number;\n  subtotal_discounted: number;\n  total: number;\n}",
           "doc": "Count and pricing totals for a collapsed destination or group section."
+        },
+        {
+          "kind": "interface",
+          "name": "ItemPathIssue",
+          "declaration": "interface ItemPathIssue {\n  index: number;\n  uid: string | undefined;\n  path: string[];\n  expected: string[];\n}",
+          "doc": "A single path mismatch reported by {@link validateItemPaths} or\n{@link validateInvoiceItemPaths} (re-exported from `@cfs/utilities/invoices`)."
         },
         {
           "kind": "interface",
@@ -1053,6 +1081,14 @@
           "name": "syncChargeDaysToItems",
           "signature": "syncChargeDaysToItems(items: LineItem[], previousDefault: number | null, newDefault: number | null): void",
           "doc": "Update chargeable_days on line items that still match the previous default.\nSkips structural items, items without a price, and manual overrides.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "validateItemPaths",
+          "signature": "validateItemPaths(items: T[]): ItemPathIssue[]",
+          "doc": "Assert every line item's `path` matches what {@link computeItemPaths} would\nproduce — i.e. structural prefix + component ancestry + self uid, with no\nstale dest/group uids from prior drag positions.\n\nUse as a defensive write-time invariant: any client (manager, webhook\nhandlers, manual firestore_admin pokes) that writes orders should pipe\n`items` through `computeItemPaths` first, so a non-empty result here means\nthe client skipped the recompute step.\n\nReturns `[]` when every path is clean.",
           "paramTags": [],
           "returnsTag": null
         }
