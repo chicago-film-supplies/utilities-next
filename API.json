@@ -445,6 +445,14 @@
         },
         {
           "kind": "function",
+          "name": "getItemSubtreeRange",
+          "signature": "getItemSubtreeRange(items: T[], index: number): typeLiteral",
+          "doc": "Return the contiguous index range covering an item and every descendant of it,\nderived purely from `path` (not from item types or adjacency rules).\n\n`computeItemPaths` lays items out depth-first, so descendants of `items[index]`\nare always contiguous starting at `index + 1` and run until the first item\nwhose path does not start with `items[index].path`.\n\nGeneric over any `{ path: string[] }` so it works on order line items, invoice\nline items (whose paths are scoped by an order divider uid), and any other\npath-keyed flat array.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
           "name": "getOrderScopedItems",
           "signature": "getOrderScopedItems(items: InvoiceItem[], orderDividerUid: string): InvoiceItem[]",
           "doc": "Get all invoice items scoped to a specific order divider.\nReturns the order divider itself plus all items whose path starts\nwith the order divider's uid.",
@@ -909,6 +917,14 @@
           "name": "getGroupTotals",
           "signature": "getGroupTotals(items: LineItem[], index: number, taxes: Tax[]): GroupTotalsResult",
           "doc": "Get count and pricing totals for a collapsed section.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "getItemSubtreeRange",
+          "signature": "getItemSubtreeRange(items: T[], index: number): typeLiteral",
+          "doc": "Return the contiguous index range covering an item and every descendant of it,\nderived purely from `path` (not from item types or adjacency rules).\n\n`computeItemPaths` lays items out depth-first, so descendants of `items[index]`\nare always contiguous starting at `index + 1` and run until the first item\nwhose path does not start with `items[index].path`.\n\nGeneric over any `{ path: string[] }` so it works on order line items, invoice\nline items (whose paths are scoped by an order divider uid), and any other\npath-keyed flat array.",
           "paramTags": [],
           "returnsTag": null
         },

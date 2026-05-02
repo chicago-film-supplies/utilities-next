@@ -541,6 +541,19 @@ Pure function — does not mutate the invoice.
 Filter out structural items (group/destination/order dividers) and return only
 billable line items suitable for Xero sync or totals calculation.
 
+### `getItemSubtreeRange(items: T[], index: number): typeLiteral`
+
+Return the contiguous index range covering an item and every descendant of it,
+derived purely from `path` (not from item types or adjacency rules).
+
+`computeItemPaths` lays items out depth-first, so descendants of `items[index]`
+are always contiguous starting at `index + 1` and run until the first item
+whose path does not start with `items[index].path`.
+
+Generic over any `{ path: string[] }` so it works on order line items, invoice
+line items (whose paths are scoped by an order divider uid), and any other
+path-keyed flat array.
+
 ### `getOrderScopedItems(items: InvoiceItem[], orderDividerUid: string): InvoiceItem[]`
 
 Get all invoice items scoped to a specific order divider.
@@ -1018,6 +1031,19 @@ or risking collisions between two groups that happen to share a name.
 ### `getGroupTotals(items: LineItem[], index: number, taxes: Tax[]): GroupTotalsResult`
 
 Get count and pricing totals for a collapsed section.
+
+### `getItemSubtreeRange(items: T[], index: number): typeLiteral`
+
+Return the contiguous index range covering an item and every descendant of it,
+derived purely from `path` (not from item types or adjacency rules).
+
+`computeItemPaths` lays items out depth-first, so descendants of `items[index]`
+are always contiguous starting at `index + 1` and run until the first item
+whose path does not start with `items[index].path`.
+
+Generic over any `{ path: string[] }` so it works on order line items, invoice
+line items (whose paths are scoped by an order divider uid), and any other
+path-keyed flat array.
 
 ### `getParentProductUid(item: LineItem, structuralUids: Set<string>): string | null`
 
