@@ -18,6 +18,7 @@ export {
   calculateItemTax,
   calculateItemTotal,
   computeItemPaths,
+  getItemSubtreeRange,
   getParentProductUid,
   getStructuralUids,
   type Discount,

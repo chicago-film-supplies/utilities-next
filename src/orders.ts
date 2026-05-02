@@ -668,6 +668,37 @@ export function getParentProductUid(item: LineItem, structuralUids: Set<string>)
 }
 
 /**
+ * Return the contiguous index range covering an item and every descendant of it,
+ * derived purely from `path` (not from item types or adjacency rules).
+ *
+ * `computeItemPaths` lays items out depth-first, so descendants of `items[index]`
+ * are always contiguous starting at `index + 1` and run until the first item
+ * whose path does not start with `items[index].path`.
+ *
+ * Generic over any `{ path: string[] }` so it works on order line items, invoice
+ * line items (whose paths are scoped by an order divider uid), and any other
+ * path-keyed flat array.
+ */
+export function getItemSubtreeRange<T extends { path: string[] }>(
+  items: T[],
+  index: number,
+): { startIndex: number; endIndex: number } {
+  const prefix = items[index].path;
+  let endIndex = index;
+  for (let i = index + 1; i < items.length; i++) {
+    const p = items[i].path;
+    if (p.length < prefix.length) break;
+    let matches = true;
+    for (let j = 0; j < prefix.length; j++) {
+      if (p[j] !== prefix[j]) { matches = false; break; }
+    }
+    if (!matches) break;
+    endIndex = i;
+  }
+  return { startIndex: index, endIndex };
+}
+
+/**
  * Compute full structural paths for a flat items array.
  * Each item's path = [structural context...] + [component ancestry...] + [self uid].
  *

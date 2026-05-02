@@ -14,6 +14,7 @@ import {
   getGroupItems,
   getGroupPath,
   getGroupTotals,
+  getItemSubtreeRange,
   getParentProductUid,
   getRemovalIndices,
   getStructuralUids,
@@ -1282,4 +1283,93 @@ Deno.test("getRemovalIndices removes product and all descendants", () => {
     makeItem({ uid: "other", path: ["d1", "other"] }),
   ];
   assertEquals(getRemovalIndices(items, 0), [0, 1, 2]);
+});
+
+// ── getItemSubtreeRange ─────────────────────────────────────────
+
+Deno.test("getItemSubtreeRange covers a destination through its last child", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "p2"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"] },
+    makeItem({ uid: "p3", path: ["d2", "p3"] }),
+  ];
+  assertEquals(getItemSubtreeRange(items, 0), { startIndex: 0, endIndex: 3 });
+});
+
+Deno.test("getItemSubtreeRange covers a group up to the next group/destination", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "g1", "p2"] }),
+    { type: "group", uid: "g2", name: "G2", path: ["d1", "g2"] },
+    makeItem({ uid: "p3", path: ["d1", "g2", "p3"] }),
+  ];
+  assertEquals(getItemSubtreeRange(items, 1), { startIndex: 1, endIndex: 3 });
+});
+
+Deno.test("getItemSubtreeRange covers a top-level product and its components", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "P1", path: ["d1", "P1"] }),
+    makeItem({ uid: "C1", path: ["d1", "P1", "C1"] }),
+    makeItem({ uid: "C2", path: ["d1", "P1", "C2"] }),
+    makeItem({ uid: "P2", path: ["d1", "P2"] }),
+  ];
+  assertEquals(getItemSubtreeRange(items, 1), { startIndex: 1, endIndex: 3 });
+});
+
+Deno.test("getItemSubtreeRange covers a nested component subtree", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "P", path: ["d1", "P"] }),
+    makeItem({ uid: "C", path: ["d1", "P", "C"] }),
+    makeItem({ uid: "GC", path: ["d1", "P", "C", "GC"] }),
+    makeItem({ uid: "Other", path: ["d1", "P", "Other"] }),
+  ];
+  assertEquals(getItemSubtreeRange(items, 2), { startIndex: 2, endIndex: 3 });
+});
+
+Deno.test("getItemSubtreeRange returns single-index range when item has no descendants", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "p1", path: ["d1", "p1"] }),
+    makeItem({ uid: "p2", path: ["d1", "p2"] }),
+  ];
+  assertEquals(getItemSubtreeRange(items, 1), { startIndex: 1, endIndex: 1 });
+});
+
+Deno.test("getItemSubtreeRange runs to end of array when nothing follows", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "P", path: ["d1", "P"] }),
+    makeItem({ uid: "C", path: ["d1", "P", "C"] }),
+  ];
+  assertEquals(getItemSubtreeRange(items, 0), { startIndex: 0, endIndex: 2 });
+  assertEquals(getItemSubtreeRange(items, 1), { startIndex: 1, endIndex: 2 });
+});
+
+Deno.test("getItemSubtreeRange handles invoice-style paths prefixed with order uid", () => {
+  // Invoice items carry an extra leading scope segment (the order divider uid).
+  // Path-prefix matching works identically — the helper is generic over any
+  // { path: string[] } shape.
+  type InvoiceLike = { path: string[]; uid: string };
+  const items: InvoiceLike[] = [
+    { uid: "o1", path: ["o1"] },
+    { uid: "d1", path: ["o1", "d1"] },
+    { uid: "p1", path: ["o1", "d1", "p1"] },
+    { uid: "c1", path: ["o1", "d1", "p1", "c1"] },
+    { uid: "p2", path: ["o1", "d1", "p2"] },
+    { uid: "o2", path: ["o2"] },
+    { uid: "d2", path: ["o2", "d2"] },
+  ];
+  // Order divider covers everything until the next order
+  assertEquals(getItemSubtreeRange(items, 0), { startIndex: 0, endIndex: 4 });
+  // Destination within the order
+  assertEquals(getItemSubtreeRange(items, 1), { startIndex: 1, endIndex: 4 });
+  // Top-level product within the destination, includes its component
+  assertEquals(getItemSubtreeRange(items, 2), { startIndex: 2, endIndex: 3 });
 });
