@@ -711,6 +711,12 @@ export function getItemSubtreeRange<T extends { path: string[] }>(
  * Callers should replace their working array with the return value.
  */
 export function computeItemPaths<T extends LineItem>(items: T[]): T[] {
+  // Strip ALL structural uids (every dest + group in the array) from line
+  // item paths — not just the current ones. After a drag operation, an item's
+  // existing path may carry uids of destinations/groups it briefly passed
+  // through; treating those as legitimate component ancestry inflates the
+  // item's apparent depth and corrupts subtree queries.
+  const structuralUids = getStructuralUids(items);
   let currentDestUid: string | null = null;
   let currentGroupUid: string | null = null;
   return items.map((item) => {
@@ -723,13 +729,14 @@ export function computeItemPaths<T extends LineItem>(items: T[]): T[] {
       currentGroupUid = item.uid;
       return { ...item, path: currentDestUid ? [currentDestUid, item.uid] : [item.uid] };
     }
-    // Line items: structural prefix + component ancestry + self uid
+    // Line items: structural prefix + component ancestry + self uid.
+    // Component ancestry comes from the client-sent path with all structural
+    // uids and self stripped — what's left is the chain of parent product uids.
     const prefix: string[] = [];
     if (currentDestUid) prefix.push(currentDestUid);
     if (currentGroupUid) prefix.push(currentGroupUid);
-    // Strip any structural/self uids already in client-sent path
     const clientPath = (item.path ?? []).filter(
-      (seg) => seg !== currentDestUid && seg !== currentGroupUid && seg !== item.uid,
+      (seg) => !structuralUids.has(seg) && seg !== item.uid,
     );
     return { ...item, path: [...prefix, ...clientPath, item.uid] };
   });

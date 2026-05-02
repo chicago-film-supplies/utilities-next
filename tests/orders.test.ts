@@ -1208,6 +1208,59 @@ Deno.test("computeItemPaths does not mutate input items", () => {
   assertEquals(result[1] === original, false);
 });
 
+Deno.test("computeItemPaths strips stale structural uids carried over from prior drag positions", () => {
+  // Simulates an item that has been dragged across destinations/groups —
+  // its path field carries leaked structural uids from previous positions.
+  // Recompute should clean them out, leaving only the current structural
+  // prefix + component ancestry + self.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "tents", name: "Tents", path: ["d1", "tents"] },
+    // Black tent's path leaked an old "hi" group uid (group still exists in
+    // a different destination) and an old "d2" destination uid.
+    makeItem({ uid: "blackTent", path: ["d1", "tents", "hi", "d2", "blackTent"] }),
+    // White tent leaked just "d2".
+    makeItem({ uid: "whiteTent", path: ["d1", "tents", "d2", "whiteTent"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"] },
+    { type: "group", uid: "hi", name: "Hi", path: ["d2", "hi"] },
+  ];
+  const result = computeItemPaths(items);
+  // Both tents should have clean paths regardless of where they used to live
+  assertEquals(result[2].path, ["d1", "tents", "blackTent"]);
+  assertEquals(result[3].path, ["d1", "tents", "whiteTent"]);
+});
+
+Deno.test("computeItemPaths preserves component ancestry through stale-uid filter", () => {
+  // Component ancestry uids (top-level product uid + nested component uids)
+  // must NOT be stripped — they're not structural.
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    makeItem({ uid: "parentProduct", path: ["d1", "parentProduct"] }),
+    makeItem({ uid: "child", path: ["d1", "parentProduct", "child"] }),
+    makeItem({ uid: "grandchild", path: ["d1", "parentProduct", "child", "grandchild"] }),
+  ];
+  const result = computeItemPaths(items);
+  assertEquals(result[1].path, ["d1", "parentProduct"]);
+  assertEquals(result[2].path, ["d1", "parentProduct", "child"]);
+  assertEquals(result[3].path, ["d1", "parentProduct", "child", "grandchild"]);
+});
+
+Deno.test("computeItemPaths is idempotent — running twice equals running once", () => {
+  const items: LineItem[] = [
+    { type: "destination", uid: "d1", name: "", path: ["d1"] },
+    { type: "group", uid: "g1", name: "G1", path: ["d1", "g1"] },
+    makeItem({ uid: "p1", path: ["d1", "g1", "stale", "p1"] }),
+    makeItem({ uid: "c1", path: ["d1", "g1", "p1", "c1"] }),
+    { type: "destination", uid: "d2", name: "", path: ["d2"] },
+    makeItem({ uid: "stale", path: ["d2", "stale"] }),
+  ];
+  const once = computeItemPaths(items);
+  const twice = computeItemPaths(once);
+  for (let i = 0; i < items.length; i++) {
+    assertEquals(twice[i].path, once[i].path);
+  }
+});
+
 // ── getStructuralUids ───────────────────────────────────────────
 
 Deno.test("getStructuralUids returns dest and group uids only", () => {
