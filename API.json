@@ -269,6 +269,12 @@
         },
         {
           "kind": "interface",
+          "name": "ItemUniquenessIssue",
+          "declaration": "interface ItemUniquenessIssue {\n  index: number;\n  uid: string;\n  parentUid: string | null;\n  firstIndex: number;\n}",
+          "doc": "A single uniqueness violation reported by {@link validateItemUniqueness}\n(and the invoice-scoped variant in `@cfs/utilities/invoices`)."
+        },
+        {
+          "kind": "interface",
           "name": "LineItem",
           "declaration": "interface LineItem {\n  uid: string;\n  name: string;\n  type: string;\n  quantity?: number;\n  price?: PriceObject | PriceModifierType;\n  stock_method?: string;\n  path: string[];\n  uid_delivery?: string | null;\n  uid_collection?: string | null;\n  zero_priced?: boolean | null;\n  description?: string;\n  order_number?: number;\n  uid_order?: string | null;\n}",
           "doc": "A single line item in an order (product, destination, group, surcharge, or fee).\nLoose interface compatible with all OrderDocItemType members — utility functions\nuse type guards (isPriceableItem, isTransactionFeeItem) before accessing\nmember-specific fields."
@@ -416,7 +422,7 @@
           "kind": "function",
           "name": "computeItemPaths",
           "signature": "computeItemPaths(items: T[]): T[]",
-          "doc": "Compute full structural paths for a flat items array.\nEach item's path = [structural context...] + [component ancestry...] + [self uid].\n\nClient-sent paths carry component ancestry (from ProductComponent.path).\nThis function prepends structural context (dest/group) and appends self uid.\n\nPure: returns a fresh array of fresh items. Inputs are not mutated, so it is\nsafe to pass items that originate from a Solid store proxy (the manager app\nroutes reordered arrays through this function inside `setEntity` updaters).\nCallers should replace their working array with the return value.",
+          "doc": "Compute full structural paths for a flat items array AND linearize it\ndepth-first with `zero_priced` items sorted before priced ones inside each\nparent's direct-children block.\n\nEach item's path = [structural context...] + [component ancestry...] + [self uid].\n\nClient-sent paths carry component ancestry (from ProductComponent.path).\nThis function prepends structural context (dest/group) and appends self uid.\n\nThree transforms in order:\n 1. Recompute every item's `path`. Strip ALL structural uids (every dest +\n    group currently in the array) and the item's own uid from the\n    client-supplied path; also strip orphan ancestor uids — segments that\n    don't resolve to any item in the array (e.g. catalog-only intermediate\n    kit uids that were never materialized). Then prepend the structural\n    prefix and append the item's own uid.\n 2. Linearize line items inside each (destination, group) block as a tree:\n    each parent product is followed by its full subtree before the next\n    sibling. Destination and group dividers stay where they are; only the\n    line items between them are reordered.\n 3. Within each parent's direct-children, stable-sort `zero_priced === true`\n    before others. Drag-drop reorders preserve intra-band order.\n\nPure: returns a fresh array of fresh items. Inputs are not mutated, so it is\nsafe to pass items that originate from a Solid store proxy (the manager app\nroutes reordered arrays through this function inside `setEntity` updaters).\nCallers should replace their working array with the return value.\n\nPost-condition (under the within-parent uniqueness invariant): a parent and\nits full subtree occupy a contiguous index range, so `getItemSubtreeRange`\nand `getGroupItems` can rely on path-prefix matching alone.",
           "paramTags": [],
           "returnsTag": null
         },
@@ -706,7 +712,15 @@
           "kind": "function",
           "name": "validateInvoiceItemPaths",
           "signature": "validateInvoiceItemPaths(items: T[]): ItemPathIssue[]",
-          "doc": "Assert every invoice item's `path` matches what {@link computeInvoiceItemPaths}\nwould produce — the order-divider-scoped variant of {@link computeItemPaths}.\n\nUse as a defensive write-time invariant: any client that writes invoices\nshould pipe `items` through `computeInvoiceItemPaths` first, so a non-empty\nresult here means the client skipped the recompute step.\n\nReturns `[]` when every path is clean.",
+          "doc": "Assert every invoice item's `path` matches what {@link computeInvoiceItemPaths}\nwould produce — the order-divider-scoped variant of {@link computeItemPaths}.\n\nUse as a defensive write-time invariant: any client that writes invoices\nshould pipe `items` through `computeInvoiceItemPaths` first, so a non-empty\nresult here means the client skipped the recompute step. Also flags index\npositions whose `uid` doesn't match the recomputed array's uid at the same\nindex — under depth-first contiguity, a uid mismatch means the array needs\nre-linearization.\n\nReturns `[]` when every path is clean and order is canonical.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "validateInvoiceItemUniqueness",
+          "signature": "validateInvoiceItemUniqueness(items: T[]): ItemUniquenessIssue[]",
+          "doc": "Within-parent uniqueness check for invoice items.\n\nReuses {@link validateItemUniqueness}'s logic — the parent uid is the\nsecond-to-last `path` segment, which for invoice items naturally captures\neach scope:\n - top-level destination/group/product under an order divider →\n   parentUid is the order divider uid (first segment),\n - product under a destination → parentUid is the destination uid,\n - product under a group → parentUid is the group uid,\n - component → parentUid is the parent product line uid.\n\nSo the `(parentUid, uid)` key naturally scopes per order divider for\ntop-level entries, and per parent product for nested ones.\n\nReturns `[]` when uniqueness holds.",
           "paramTags": [],
           "returnsTag": null
         },
@@ -714,7 +728,15 @@
           "kind": "function",
           "name": "validateItemPaths",
           "signature": "validateItemPaths(items: T[]): ItemPathIssue[]",
-          "doc": "Assert every line item's `path` matches what {@link computeItemPaths} would\nproduce — i.e. structural prefix + component ancestry + self uid, with no\nstale dest/group uids from prior drag positions.\n\nUse as a defensive write-time invariant: any client (manager, webhook\nhandlers, manual firestore_admin pokes) that writes orders should pipe\n`items` through `computeItemPaths` first, so a non-empty result here means\nthe client skipped the recompute step.\n\nReturns `[]` when every path is clean.",
+          "doc": "Assert every line item's `path` matches what {@link computeItemPaths} would\nproduce — i.e. structural prefix + component ancestry + self uid, with no\nstale dest/group uids from prior drag positions.\n\nUse as a defensive write-time invariant: any client (manager, webhook\nhandlers, manual firestore_admin pokes) that writes orders should pipe\n`items` through `computeItemPaths` first, so a non-empty result here means\nthe client skipped the recompute step.\n\nReports per-index mismatches; under the depth-first contiguity invariant,\nan index whose `uid` doesn't match the recomputed array's uid at the same\nindex is also a violation (the array needs re-linearization). The original\npath is reported so the caller can diff against `expected`.\n\nReturns `[]` when every path is clean and order is canonical.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "validateItemUniqueness",
+          "signature": "validateItemUniqueness(items: T[]): ItemUniquenessIssue[]",
+          "doc": "Assert that within each items array, no two entries share the same `uid`\nAND the same immediate structural parent. The immediate structural parent\nis the second-to-last `path` segment (or `null` for items whose path is\njust `[self.uid]`).\n\nThis is the uniqueness invariant orders/invoices rely on so that path-based\nline identity is unambiguous. Violations indicate a duplicate that should\nbe merged — `mergeStagedIntoOrder` and the migration script consolidate.\n\nReturns `[]` when uniqueness holds.",
           "paramTags": [],
           "returnsTag": null
         }
@@ -759,6 +781,12 @@
           "name": "ItemPathIssue",
           "declaration": "interface ItemPathIssue {\n  index: number;\n  uid: string | undefined;\n  path: string[];\n  expected: string[];\n}",
           "doc": "A single path mismatch reported by {@link validateItemPaths} or\n{@link validateInvoiceItemPaths} (re-exported from `@cfs/utilities/invoices`)."
+        },
+        {
+          "kind": "interface",
+          "name": "ItemUniquenessIssue",
+          "declaration": "interface ItemUniquenessIssue {\n  index: number;\n  uid: string;\n  parentUid: string | null;\n  firstIndex: number;\n}",
+          "doc": "A single uniqueness violation reported by {@link validateItemUniqueness}\n(and the invoice-scoped variant in `@cfs/utilities/invoices`)."
         },
         {
           "kind": "interface",
@@ -888,7 +916,7 @@
           "kind": "function",
           "name": "computeItemPaths",
           "signature": "computeItemPaths(items: T[]): T[]",
-          "doc": "Compute full structural paths for a flat items array.\nEach item's path = [structural context...] + [component ancestry...] + [self uid].\n\nClient-sent paths carry component ancestry (from ProductComponent.path).\nThis function prepends structural context (dest/group) and appends self uid.\n\nPure: returns a fresh array of fresh items. Inputs are not mutated, so it is\nsafe to pass items that originate from a Solid store proxy (the manager app\nroutes reordered arrays through this function inside `setEntity` updaters).\nCallers should replace their working array with the return value.",
+          "doc": "Compute full structural paths for a flat items array AND linearize it\ndepth-first with `zero_priced` items sorted before priced ones inside each\nparent's direct-children block.\n\nEach item's path = [structural context...] + [component ancestry...] + [self uid].\n\nClient-sent paths carry component ancestry (from ProductComponent.path).\nThis function prepends structural context (dest/group) and appends self uid.\n\nThree transforms in order:\n 1. Recompute every item's `path`. Strip ALL structural uids (every dest +\n    group currently in the array) and the item's own uid from the\n    client-supplied path; also strip orphan ancestor uids — segments that\n    don't resolve to any item in the array (e.g. catalog-only intermediate\n    kit uids that were never materialized). Then prepend the structural\n    prefix and append the item's own uid.\n 2. Linearize line items inside each (destination, group) block as a tree:\n    each parent product is followed by its full subtree before the next\n    sibling. Destination and group dividers stay where they are; only the\n    line items between them are reordered.\n 3. Within each parent's direct-children, stable-sort `zero_priced === true`\n    before others. Drag-drop reorders preserve intra-band order.\n\nPure: returns a fresh array of fresh items. Inputs are not mutated, so it is\nsafe to pass items that originate from a Solid store proxy (the manager app\nroutes reordered arrays through this function inside `setEntity` updaters).\nCallers should replace their working array with the return value.\n\nPost-condition (under the within-parent uniqueness invariant): a parent and\nits full subtree occupy a contiguous index range, so `getItemSubtreeRange`\nand `getGroupItems` can rely on path-prefix matching alone.",
           "paramTags": [],
           "returnsTag": null
         },
@@ -928,7 +956,7 @@
           "kind": "function",
           "name": "getGroupItems",
           "signature": "getGroupItems(items: LineItem[], index: number): LineItem[]",
-          "doc": "Collect the child product items belonging to a collapsible section.",
+          "doc": "Collect the child product items belonging to a collapsible section.\n\nDestination / group: walk forward to the next divider of the same or\nouter level, collecting every line item.\n\nProduct: walk only its own contiguous subtree (via `getItemSubtreeRange`)\nand return the immediate children (`path.at(-2) === item.uid`). Under the\nwithin-parent uniqueness invariant, `path.at(-2) === uid` is unambiguous\ninside the subtree; constraining to the subtree range protects against\naccidental cross-parent collisions if an upstream invariant violation\nslips through.",
           "paramTags": [],
           "returnsTag": null
         },
@@ -1088,7 +1116,15 @@
           "kind": "function",
           "name": "validateItemPaths",
           "signature": "validateItemPaths(items: T[]): ItemPathIssue[]",
-          "doc": "Assert every line item's `path` matches what {@link computeItemPaths} would\nproduce — i.e. structural prefix + component ancestry + self uid, with no\nstale dest/group uids from prior drag positions.\n\nUse as a defensive write-time invariant: any client (manager, webhook\nhandlers, manual firestore_admin pokes) that writes orders should pipe\n`items` through `computeItemPaths` first, so a non-empty result here means\nthe client skipped the recompute step.\n\nReturns `[]` when every path is clean.",
+          "doc": "Assert every line item's `path` matches what {@link computeItemPaths} would\nproduce — i.e. structural prefix + component ancestry + self uid, with no\nstale dest/group uids from prior drag positions.\n\nUse as a defensive write-time invariant: any client (manager, webhook\nhandlers, manual firestore_admin pokes) that writes orders should pipe\n`items` through `computeItemPaths` first, so a non-empty result here means\nthe client skipped the recompute step.\n\nReports per-index mismatches; under the depth-first contiguity invariant,\nan index whose `uid` doesn't match the recomputed array's uid at the same\nindex is also a violation (the array needs re-linearization). The original\npath is reported so the caller can diff against `expected`.\n\nReturns `[]` when every path is clean and order is canonical.",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
+          "name": "validateItemUniqueness",
+          "signature": "validateItemUniqueness(items: T[]): ItemUniquenessIssue[]",
+          "doc": "Assert that within each items array, no two entries share the same `uid`\nAND the same immediate structural parent. The immediate structural parent\nis the second-to-last `path` segment (or `null` for items whose path is\njust `[self.uid]`).\n\nThis is the uniqueness invariant orders/invoices rely on so that path-based\nline identity is unambiguous. Violations indicate a duplicate that should\nbe merged — `mergeStagedIntoOrder` and the migration script consolidate.\n\nReturns `[]` when uniqueness holds.",
           "paramTags": [],
           "returnsTag": null
         }
