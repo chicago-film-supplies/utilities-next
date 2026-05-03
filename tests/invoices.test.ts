@@ -1,0 +1,928 @@
+import { assertEquals } from "@std/assert";
+import { getInitialValues, InvoiceDocLineItemSchema, InvoiceDocOrderItem, OrderDocDestinationItem, OrderDocGroupItem } from "@cfs/schemas";
+import {
+  buildOrderScopedItems,
+  calculateInvoiceTotals,
+  carryForwardOverrides,
+  computeInvoiceItemPaths,
+  derivePaymentStatus,
+  flattenForXero,
+  getOrderScopedItems,
+  getXeroUnitAmount,
+  type InvoiceDestinationPair,
+  type InvoiceItem,
+  type LineItem,
+  type Tax,
+  recomputePaymentTotals,
+  removeOrderScopedDestinations,
+  removeOrderScopedItems,
+  syncObjectWithOverride,
+  syncOrderDestinationsSelective,
+  syncOrderItems,
+  syncOrderToInvoiceSelective,
+  syncScalarWithOverride,
+  validateInvoiceItemPaths,
+  validateInvoiceItemUniqueness,
+} from "../src/invoices.ts";
+
+// ── Schema bases ────────────────────────────────────────────────
+
+const lineItemBase = getInitialValues(InvoiceDocLineItemSchema) as Record<string, unknown>;
+const priceBase = (lineItemBase as { price: Record<string, unknown> }).price;
+const orderDividerBase = getInitialValues(InvoiceDocOrderItem) as Record<string, unknown>;
+
+function makeItem(
+  overrides: Partial<InvoiceItem> = {},
+  priceOverrides: Record<string, unknown> = {},
+): InvoiceItem {
+  return {
+    ...lineItemBase,
+    name: "Test Item",
+    quantity: 1,
+    ...overrides,
+    price: {
+      ...priceBase,
+      ...priceOverrides,
+    },
+  } as unknown as InvoiceItem;
+}
+
+// ── Test data ───────────────────────────────────────────────────
+
+const orderDivider: InvoiceItem = {
+  ...orderDividerBase,
+  uid: "order-div-1",
+  name: "Order #1001",
+  uid_order: "order-1",
+} as InvoiceItem;
+
+const destItem: InvoiceItem = {
+  uid: "dest-1",
+  type: "destination",
+  name: "Main Venue",
+  uid_delivery: "del-1",
+  uid_collection: null,
+  path: ["order-div-1", "dest-1"],
+};
+
+const lineItem1: InvoiceItem = {
+  ...lineItemBase,
+  uid: "item-1",
+  type: "rental",
+  name: "Spot Light",
+  quantity: 2,
+  price: {
+    ...priceBase,
+    base: 100,
+    chargeable_days: 5,
+    subtotal: 200,
+    subtotal_discounted: 200,
+    total: 200,
+  },
+  path: ["order-div-1", "dest-1", "item-1"],
+  coa_revenue: 4100,
+  tracking_category: "rentals",
+} as InvoiceItem;
+
+const lineItem2: InvoiceItem = {
+  ...lineItemBase,
+  uid: "item-2",
+  type: "sale",
+  name: "Tripod",
+  quantity: 1,
+  price: {
+    ...priceBase,
+    base: 300,
+    formula: "fixed",
+    subtotal: 300,
+    subtotal_discounted: 300,
+    total: 300,
+  },
+  path: ["order-div-1", "dest-1", "item-2"],
+  xero_id: "xero-123",
+} as InvoiceItem;
+
+const orderDivider2: InvoiceItem = {
+  ...orderDividerBase,
+  uid: "order-div-2",
+  name: "Order #1002",
+  uid_order: "order-2",
+} as InvoiceItem;
+
+const lineItem3: InvoiceItem = {
+  ...lineItemBase,
+  uid: "item-3",
+  type: "rental",
+  name: "Camera",
+  quantity: 1,
+  price: {
+    ...priceBase,
+    base: 500,
+    chargeable_days: 5,
+    subtotal: 500,
+    subtotal_discounted: 500,
+    total: 500,
+  },
+  path: ["order-div-2", "item-3"],
+} as InvoiceItem;
+
+const multiOrderInvoiceItems: InvoiceItem[] = [
+  orderDivider,
+  destItem,
+  lineItem1,
+  lineItem2,
+  orderDivider2,
+  lineItem3,
+];
+
+// ── flattenForXero ──────────────────────────────────────────────
+
+Deno.test("flattenForXero removes destination, group, and order dividers", () => {
+  const items: LineItem[] = [
+    { type: "order", uid: "o1", name: "Order", path: [] },
+    { type: "destination", uid: "d1", name: "Venue", path: [] },
+    { type: "group", uid: "g1", name: "Lighting", path: [] },
+    { type: "rental", uid: "i1", name: "Light", quantity: 1, path: [] },
+    { type: "sale", uid: "i2", name: "Tripod", quantity: 1, path: [] },
+  ];
+  const result = flattenForXero(items);
+  assertEquals(result.length, 2);
+  assertEquals(result[0].uid, "i1");
+  assertEquals(result[1].uid, "i2");
+});
+
+// ── getOrderScopedItems ─────────────────────────────────────────
+
+Deno.test("getOrderScopedItems returns divider and children for order-div-1", () => {
+  const result = getOrderScopedItems(multiOrderInvoiceItems, "order-div-1");
+  assertEquals(result.length, 4); // divider + dest + 2 line items
+  assertEquals(result[0].uid, "order-div-1");
+  assertEquals(result[1].uid, "dest-1");
+  assertEquals(result[2].uid, "item-1");
+  assertEquals(result[3].uid, "item-2");
+});
+
+Deno.test("getOrderScopedItems returns divider and children for order-div-2", () => {
+  const result = getOrderScopedItems(multiOrderInvoiceItems, "order-div-2");
+  assertEquals(result.length, 2); // divider + 1 line item
+  assertEquals(result[0].uid, "order-div-2");
+  assertEquals(result[1].uid, "item-3");
+});
+
+Deno.test("getOrderScopedItems returns empty for unknown divider", () => {
+  const result = getOrderScopedItems(multiOrderInvoiceItems, "nonexistent");
+  assertEquals(result.length, 0);
+});
+
+// ── removeOrderScopedItems ──────────────────────────────────────
+
+Deno.test("removeOrderScopedItems removes order-div-1 scope, keeps order-div-2", () => {
+  const result = removeOrderScopedItems(multiOrderInvoiceItems, "order-div-1");
+  assertEquals(result.length, 2); // order-div-2 + item-3
+  assertEquals(result[0].uid, "order-div-2");
+  assertEquals(result[1].uid, "item-3");
+});
+
+Deno.test("removeOrderScopedItems removes order-div-2 scope, keeps order-div-1", () => {
+  const result = removeOrderScopedItems(multiOrderInvoiceItems, "order-div-2");
+  assertEquals(result.length, 4); // order-div-1 + dest + 2 line items
+});
+
+// ── buildOrderScopedItems ───────────────────────────────────────
+
+Deno.test("buildOrderScopedItems prepends order divider uid to path", () => {
+  const orderItems: LineItem[] = [
+    { uid: "dest-1", type: "destination", name: "Venue", path: ["dest-1"] },
+    { uid: "item-1", type: "rental", name: "Light", path: ["dest-1", "item-1"] },
+    { uid: "item-2", type: "rental", name: "Camera", path: ["dest-1", "item-2"] },
+  ];
+  const result = buildOrderScopedItems(orderItems, "order-div-1");
+  assertEquals(result[0].path, ["order-div-1", "dest-1"]);
+  assertEquals(result[1].path, ["order-div-1", "dest-1", "item-1"]);
+  assertEquals(result[2].path, ["order-div-1", "dest-1", "item-2"]);
+});
+
+Deno.test("buildOrderScopedItems projects order-only fields off line items", () => {
+  // Order line item carrying every order-only field — must NOT leak to invoice shape.
+  const orderItems: LineItem[] = [
+    {
+      uid: "item-1",
+      type: "rental",
+      name: "Light",
+      quantity: 2,
+      path: ["dest-1", "item-1"],
+      stock_method: "reserve",
+      order_number: 1001,
+      uid_order: "order-1",
+      zero_priced: false,
+      uid_delivery: "del-1",
+      uid_collection: "col-1",
+      // @ts-expect-error — inclusion_type not on LineItem type, but exists at runtime on OrderDocLineItem
+      inclusion_type: "mandatory",
+      price: {
+        base: 100,
+        chargeable_days: 5,
+        formula: "five_day_week",
+        subtotal: 200,
+        subtotal_discounted: 200,
+        discount: null,
+        taxes: [],
+        total: 200,
+        replacement: 5000,
+      },
+    },
+  ];
+  const [projected] = buildOrderScopedItems(orderItems, "order-div-1");
+
+  // Projected item passes strict invoice line-item schema — rejects any leaked key.
+  const result = InvoiceDocLineItemSchema.safeParse(projected);
+  assertEquals(result.success, true, JSON.stringify(result.success ? {} : result.error.issues, null, 2));
+
+  // Projected price passes — rejects leaked `replacement`.
+  const keys = Object.keys(projected).sort();
+  assertEquals(
+    keys.includes("stock_method") || keys.includes("order_number") || keys.includes("uid_order") ||
+      keys.includes("inclusion_type") || keys.includes("zero_priced") || keys.includes("uid_delivery") ||
+      keys.includes("uid_collection"),
+    false,
+    `leaked keys present: ${keys.join(", ")}`,
+  );
+  const priceKeys = Object.keys((projected as unknown as { price: Record<string, unknown> }).price);
+  assertEquals(priceKeys.includes("replacement"), false, `leaked price.replacement: ${priceKeys.join(", ")}`);
+});
+
+Deno.test("buildOrderScopedItems preserves destination shape via OrderDocDestinationItem", () => {
+  const destUid = crypto.randomUUID();
+  const orderItems: LineItem[] = [
+    {
+      uid: destUid,
+      type: "destination",
+      name: "Main Venue",
+      description: "first stop",
+      uid_delivery: "del-1",
+      uid_collection: null,
+      path: [destUid],
+    },
+  ];
+  const [projected] = buildOrderScopedItems(orderItems, "order-div-1");
+  const result = OrderDocDestinationItem.safeParse(projected);
+  assertEquals(result.success, true, JSON.stringify(result.success ? {} : result.error.issues, null, 2));
+});
+
+Deno.test("buildOrderScopedItems preserves group shape via OrderDocGroupItem", () => {
+  const groupUid = crypto.randomUUID();
+  const orderItems: LineItem[] = [
+    {
+      uid: groupUid,
+      type: "group",
+      name: "Lighting",
+      description: "",
+      path: ["dest-1", groupUid],
+    },
+  ];
+  const [projected] = buildOrderScopedItems(orderItems, "order-div-1");
+  const result = OrderDocGroupItem.safeParse(projected);
+  assertEquals(result.success, true, JSON.stringify(result.success ? {} : result.error.issues, null, 2));
+});
+
+// ── carryForwardOverrides ───────────────────────────────────────
+
+Deno.test("carryForwardOverrides preserves coa_revenue and xero_id from existing items", () => {
+  const rebuilt: InvoiceItem[] = [
+    { uid: "item-1", type: "rental", name: "Light Updated", quantity: 3, path: [] },
+    { uid: "item-new", type: "sale", name: "New Item", quantity: 1, path: [] },
+  ];
+  const existing: InvoiceItem[] = [
+    { uid: "item-1", type: "rental", name: "Light", coa_revenue: 4100, xero_id: "xero-1", path: [] },
+    { uid: "item-removed", type: "sale", name: "Gone", coa_revenue: 4200, path: [] },
+  ];
+  const result = carryForwardOverrides(rebuilt, existing);
+  assertEquals(result[0].name, "Light Updated"); // rebuilt field
+  assertEquals(result[0].quantity, 3); // rebuilt field
+  assertEquals(result[0].coa_revenue, 4100); // carried forward
+  assertEquals(result[0].xero_id, "xero-1"); // carried forward
+  assertEquals(result[1].coa_revenue, undefined); // new item, no override
+});
+
+// ── syncOrderItems ──────────────────────────────────────────────
+
+Deno.test("syncOrderItems replaces scoped items and carries forward overrides", () => {
+  const newOrderItems: LineItem[] = [
+    { uid: "dest-1", type: "destination", name: "Venue Renamed", path: ["dest-1"] },
+    { uid: "item-1", type: "rental", name: "Spot Light v2", quantity: 5, path: ["dest-1", "item-1"] },
+    { uid: "item-new", type: "service", name: "Setup Fee", quantity: 1, path: ["dest-1", "item-new"] },
+  ];
+
+  const result = syncOrderItems(multiOrderInvoiceItems, newOrderItems, "order-div-1");
+
+  // Order divider preserved
+  assertEquals(result[0].uid, "order-div-1");
+  assertEquals(result[0].type, "order");
+
+  // Rebuilt items have prepended path
+  assertEquals(result[1].path, ["order-div-1", "dest-1"]);
+  assertEquals(result[1].name, "Venue Renamed");
+
+  assertEquals(result[2].path, ["order-div-1", "dest-1", "item-1"]);
+  assertEquals(result[2].name, "Spot Light v2");
+  assertEquals(result[2].quantity, 5);
+  assertEquals((result[2] as InvoiceItem).coa_revenue, 4100); // carried forward
+
+  assertEquals(result[3].path, ["order-div-1", "dest-1", "item-new"]);
+  assertEquals(result[3].name, "Setup Fee");
+
+  // Order-div-2 items untouched
+  assertEquals(result[4].uid, "order-div-2");
+  assertEquals(result[5].uid, "item-3");
+
+  // item-2 (Tripod) was removed from order → gone from invoice
+  const tripod = result.find((i) => i.uid === "item-2");
+  assertEquals(tripod, undefined);
+});
+
+Deno.test("syncOrderItems projects order-only fields off new items (strict schema passes)", () => {
+  // Invoice has a clean divider but no scoped items yet — sync will take the "new item" path.
+  const invoiceItems: InvoiceItem[] = [orderDivider];
+  const orderItems: LineItem[] = [
+    {
+      uid: "dest-1",
+      type: "destination",
+      name: "Venue",
+      uid_delivery: "del-1",
+      uid_collection: null,
+      description: "",
+      path: ["dest-1"],
+    },
+    {
+      uid: "item-1",
+      type: "rental",
+      name: "Light",
+      quantity: 1,
+      path: ["dest-1", "item-1"],
+      stock_method: "reserve",
+      order_number: 1001,
+      uid_order: "order-1",
+      zero_priced: false,
+      // @ts-expect-error — inclusion_type not on LineItem type
+      inclusion_type: "mandatory",
+      price: {
+        base: 100, chargeable_days: 5, formula: "five_day_week",
+        subtotal: 100, subtotal_discounted: 100, discount: null, taxes: [], total: 100,
+        replacement: 5000,
+      },
+    },
+  ];
+  const result = syncOrderItems(invoiceItems, orderItems, "order-div-1");
+  const lineItem = result.find((i) => i.uid === "item-1")!;
+  const parsed = InvoiceDocLineItemSchema.safeParse(lineItem);
+  assertEquals(parsed.success, true, JSON.stringify(parsed.success ? {} : parsed.error.issues, null, 2));
+});
+
+Deno.test("syncOrderItems preserves order when divider not found (appends)", () => {
+  const items: InvoiceItem[] = [
+    { uid: "existing", type: "rental", name: "Existing Item", quantity: 1, path: ["existing"] },
+  ];
+  const orderItems: LineItem[] = [
+    { uid: "new-item", type: "sale", name: "New", quantity: 1, path: ["new-item"] },
+  ];
+  const result = syncOrderItems(items, orderItems, "unknown-divider");
+  assertEquals(result.length, 2);
+  assertEquals(result[0].uid, "existing");
+  assertEquals(result[1].path, ["unknown-divider", "new-item"]);
+});
+
+// ── syncOrderToInvoiceSelective ─────────────────────────────────
+
+Deno.test("syncOrderToInvoiceSelective projects new items to invoice-line-item shape", () => {
+  // No prev order, no current invoice items — everything takes the "new item" branch.
+  const newOrderItems: LineItem[] = [
+    {
+      uid: "item-1",
+      type: "rental",
+      name: "Light",
+      quantity: 1,
+      path: ["dest-1", "item-1"],
+      stock_method: "reserve",
+      order_number: 1001,
+      uid_order: "order-1",
+      zero_priced: false,
+      price: {
+        base: 100, chargeable_days: 5, formula: "five_day_week",
+        subtotal: 100, subtotal_discounted: 100, discount: null, taxes: [], total: 100,
+        replacement: 5000,
+      },
+    },
+  ];
+  const result = syncOrderToInvoiceSelective([], newOrderItems, [], "order-div-1");
+  assertEquals(result.length, 1);
+  const parsed = InvoiceDocLineItemSchema.safeParse(result[0]);
+  assertEquals(parsed.success, true, JSON.stringify(parsed.success ? {} : parsed.error.issues, null, 2));
+});
+
+Deno.test("syncOrderToInvoiceSelective projects synced items and carries forward invoice-only fields", () => {
+  // Prev order + matching invoice item with overrides → sync branch replaces body, keeps overrides.
+  const prevItem: LineItem = {
+    uid: "item-1",
+    type: "rental",
+    name: "Light",
+    quantity: 1,
+    path: ["dest-1", "item-1"],
+    price: {
+      base: 100, chargeable_days: 5, formula: "five_day_week",
+      subtotal: 100, subtotal_discounted: 100, discount: null, taxes: [], total: 100,
+    } as unknown as LineItem["price"],
+  };
+  const invoiceItem: InvoiceItem = {
+    ...prevItem,
+    path: ["order-div-1", "dest-1", "item-1"],
+    coa_revenue: 4100,
+    xero_id: "xero-1",
+  } as InvoiceItem;
+  const newItem: LineItem = {
+    ...prevItem,
+    name: "Light v2",
+    quantity: 3,
+    // Order-only fields must NOT survive into invoice item.
+    stock_method: "reserve",
+    order_number: 1001,
+    uid_order: "order-1",
+  };
+
+  const result = syncOrderToInvoiceSelective([prevItem], [newItem], [invoiceItem], "order-div-1");
+  assertEquals(result.length, 1);
+  const out = result[0];
+
+  // New values from projected order item
+  assertEquals(out.name, "Light v2");
+  assertEquals(out.quantity, 3);
+  // Carried forward from the overridden invoice item
+  assertEquals((out as InvoiceItem).coa_revenue, 4100);
+  assertEquals((out as InvoiceItem).xero_id, "xero-1");
+  // Projected — strict schema passes
+  const parsed = InvoiceDocLineItemSchema.safeParse(out);
+  assertEquals(parsed.success, true, JSON.stringify(parsed.success ? {} : parsed.error.issues, null, 2));
+});
+
+// ── calculateInvoiceTotals ─────────────────────────────────────
+
+const TAXES: Tax[] = [
+  { uid: "chi-rental-tax", name: "Chicago Rental Tax", rate: 15, type: "percent" },
+  { uid: "chi-sales-tax", name: "Chicago Sales Tax", rate: 10.25, type: "percent" },
+];
+
+Deno.test("calculateInvoiceTotals computes totals from billable items only", () => {
+  const items: InvoiceItem[] = [
+    { uid: "order-div", type: "order", name: "Order #1", path: [] },
+    { uid: "dest", type: "destination", name: "Venue", path: [] },
+    { uid: "group", type: "group", name: "Lighting", path: [] },
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Spot Light", quantity: 2 },
+      { base: 100, chargeable_days: 5, subtotal: 200, subtotal_discounted: 200, total: 200 },
+    ),
+    makeItem(
+      { uid: "item-2", type: "sale", name: "Tripod", quantity: 1 },
+      { base: 300, formula: "fixed", subtotal: 300, subtotal_discounted: 300, total: 300 },
+    ),
+  ];
+
+  const result = calculateInvoiceTotals(items, []);
+  assertEquals(result.subtotal, 500);
+  assertEquals(result.subtotal_discounted, 500);
+  assertEquals(result.discount_amount, 0);
+  assertEquals(result.total, 500);
+  assertEquals(result.amount_paid, 0);
+  assertEquals(result.amount_due, 500);
+  assertEquals(result.taxes, []);
+  assertEquals(result.transaction_fees, []);
+});
+
+Deno.test("calculateInvoiceTotals applies discount", () => {
+  const items: InvoiceItem[] = [
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 100, chargeable_days: 5, discount: { type: "percent", rate: 10, amount: 10 }, subtotal: 100, subtotal_discounted: 90, total: 90 },
+    ),
+  ];
+  const result = calculateInvoiceTotals(items, []);
+  assertEquals(result.subtotal, 100);
+  assertEquals(result.subtotal_discounted, 90);
+  assertEquals(result.discount_amount, 10);
+  assertEquals(result.total, 90);
+});
+
+Deno.test("calculateInvoiceTotals with taxes", () => {
+  const items: InvoiceItem[] = [
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 100, chargeable_days: 5, taxes: [{ uid: "chi-rental-tax", name: "Chicago Rental Tax", rate: 15, type: "percent", amount: 15 }], subtotal: 100, subtotal_discounted: 100, total: 115 },
+    ),
+  ];
+  const result = calculateInvoiceTotals(items, TAXES);
+  assertEquals(result.subtotal, 100);
+  assertEquals(result.total, 115);
+  assertEquals(result.taxes.length, 1);
+  assertEquals(result.taxes[0].name, "Chicago Rental Tax");
+  assertEquals(result.taxes[0].amount, 15);
+});
+
+Deno.test("calculateInvoiceTotals with payments reduces amount_due", () => {
+  const items: InvoiceItem[] = [
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 1000, formula: "fixed", subtotal: 1000, subtotal_discounted: 1000, total: 1000 },
+    ),
+  ];
+  const payments = [
+    { amount: 400, status: "active" },
+    { amount: 100, status: "deleted" },
+    { amount: 200, status: "active" },
+  ];
+  const result = calculateInvoiceTotals(items, [], payments);
+  assertEquals(result.total, 1000);
+  assertEquals(result.amount_paid, 600);
+  assertEquals(result.amount_due, 400);
+});
+
+Deno.test("calculateInvoiceTotals with empty items returns zeros", () => {
+  const result = calculateInvoiceTotals([], []);
+  assertEquals(result.subtotal, 0);
+  assertEquals(result.subtotal_discounted, 0);
+  assertEquals(result.discount_amount, 0);
+  assertEquals(result.total, 0);
+  assertEquals(result.amount_paid, 0);
+  assertEquals(result.amount_due, 0);
+});
+
+Deno.test("calculateInvoiceTotals with transaction fee", () => {
+  const items: InvoiceItem[] = [
+    makeItem(
+      { uid: "item-1", type: "rental", name: "Light" },
+      { base: 100, formula: "fixed", subtotal: 100, subtotal_discounted: 100, total: 100 },
+    ),
+    {
+      uid: "fee-1", type: "transaction_fee", name: "Credit Card Fee", path: [],
+      price: { uid: "cc-fee", name: "Credit Card Fee", rate: 3, type: "percent", amount: 0 },
+    },
+  ];
+  const result = calculateInvoiceTotals(items, []);
+  assertEquals(result.subtotal, 100);
+  assertEquals(result.transaction_fees.length, 1);
+  assertEquals(result.transaction_fees[0].name, "Credit Card Fee");
+  assertEquals(result.transaction_fees[0].amount, 3);
+  assertEquals(result.total, 103);
+});
+
+// ── derivePaymentStatus ─────────────────────────────────────────
+
+Deno.test("derivePaymentStatus passes through draft", () => {
+  assertEquals(derivePaymentStatus("draft", 0, 1000), "draft");
+});
+
+Deno.test("derivePaymentStatus passes through void", () => {
+  assertEquals(derivePaymentStatus("void", 500, 500), "void");
+});
+
+Deno.test("derivePaymentStatus returns paid when amount_due <= 0", () => {
+  assertEquals(derivePaymentStatus("issued", 1000, 0), "paid");
+});
+
+Deno.test("derivePaymentStatus returns part_paid when some paid", () => {
+  assertEquals(derivePaymentStatus("issued", 500, 500), "part_paid");
+});
+
+Deno.test("derivePaymentStatus returns issued when nothing paid", () => {
+  assertEquals(derivePaymentStatus("issued", 0, 1000), "issued");
+});
+
+// ── recomputePaymentTotals ──────────────────────────────────────
+
+Deno.test("recomputePaymentTotals sums active payments only", () => {
+  const payments = [
+    { amount: 400, status: "active" },
+    { amount: 100, status: "deleted" },
+    { amount: 200, status: "active" },
+  ];
+  const result = recomputePaymentTotals(1000, payments);
+  assertEquals(result.amount_paid, 600);
+  assertEquals(result.amount_due, 400);
+});
+
+Deno.test("recomputePaymentTotals with no payments", () => {
+  const result = recomputePaymentTotals(500, []);
+  assertEquals(result.amount_paid, 0);
+  assertEquals(result.amount_due, 500);
+});
+
+Deno.test("recomputePaymentTotals with zero total", () => {
+  const result = recomputePaymentTotals(0, [{ amount: 50, status: "active" }]);
+  assertEquals(result.amount_paid, 50);
+  assertEquals(result.amount_due, -50);
+});
+
+// ── getXeroUnitAmount ─────────────────────────────���────────────
+
+Deno.test("getXeroUnitAmount divides subtotal by quantity", () => {
+  assertEquals(getXeroUnitAmount(500, 2), 250);
+});
+
+Deno.test("getXeroUnitAmount returns 0 for zero quantity", () => {
+  assertEquals(getXeroUnitAmount(500, 0), 0);
+});
+
+Deno.test("getXeroUnitAmount handles fractional result", () => {
+  assertEquals(getXeroUnitAmount(100, 3), 33.33);
+});
+
+// ── computeInvoiceItemPaths ────────────────────────────────────
+
+Deno.test("computeInvoiceItemPaths computes paths within order scopes", () => {
+  const items: InvoiceItem[] = [
+    { ...orderDividerBase, uid: "od-1", name: "Order #1", type: "order", uid_order: "o1" } as InvoiceItem,
+    { uid: "dest-1", type: "destination", name: "Venue", path: [] },
+    makeItem({ uid: "p1", path: [] }),
+    makeItem({ uid: "p2", path: [] }),
+  ];
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(result[0].path, ["od-1"]);
+  assertEquals(result[1].path, ["od-1", "dest-1"]);
+  assertEquals(result[2].path, ["od-1", "dest-1", "p1"]);
+  assertEquals(result[3].path, ["od-1", "dest-1", "p2"]);
+});
+
+Deno.test("computeInvoiceItemPaths handles multiple order scopes", () => {
+  const items: InvoiceItem[] = [
+    { ...orderDividerBase, uid: "od-1", name: "Order #1", type: "order", uid_order: "o1" } as InvoiceItem,
+    { uid: "dest-1", type: "destination", name: "Venue A", path: [] },
+    makeItem({ uid: "p1", path: [] }),
+    { ...orderDividerBase, uid: "od-2", name: "Order #2", type: "order", uid_order: "o2" } as InvoiceItem,
+    { uid: "dest-2", type: "destination", name: "Venue B", path: [] },
+    makeItem({ uid: "p2", path: [] }),
+  ];
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(result[0].path, ["od-1"]);
+  assertEquals(result[1].path, ["od-1", "dest-1"]);
+  assertEquals(result[2].path, ["od-1", "dest-1", "p1"]);
+  assertEquals(result[3].path, ["od-2"]);
+  assertEquals(result[4].path, ["od-2", "dest-2"]);
+  assertEquals(result[5].path, ["od-2", "dest-2", "p2"]);
+});
+
+Deno.test("computeInvoiceItemPaths preserves component ancestry", () => {
+  const items: InvoiceItem[] = [
+    { ...orderDividerBase, uid: "od-1", name: "Order #1", type: "order", uid_order: "o1" } as InvoiceItem,
+    { uid: "dest-1", type: "destination", name: "Venue", path: [] },
+    makeItem({ uid: "parent", path: [] }),
+    makeItem({ uid: "child", path: ["parent"] }),
+  ];
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(result[2].path, ["od-1", "dest-1", "parent"]);
+  assertEquals(result[3].path, ["od-1", "dest-1", "parent", "child"]);
+});
+
+Deno.test("computeInvoiceItemPaths produces unique keys for siblings", () => {
+  const items: InvoiceItem[] = [
+    { ...orderDividerBase, uid: "od-1", name: "Order #1", type: "order", uid_order: "o1" } as InvoiceItem,
+    { uid: "dest-1", type: "destination", name: "Venue", path: [] },
+    makeItem({ uid: "item-A", path: [] }),
+    makeItem({ uid: "item-B", path: [] }),
+  ];
+  const result = computeInvoiceItemPaths(items);
+  const keyA = result[2].path.join("/");
+  const keyB = result[3].path.join("/");
+  assertEquals(keyA !== keyB, true);
+});
+
+Deno.test("computeInvoiceItemPaths does not mutate input items", () => {
+  const items: InvoiceItem[] = [
+    { ...orderDividerBase, uid: "od-1", name: "Order #1", type: "order", uid_order: "o1" } as InvoiceItem,
+    { uid: "dest-1", type: "destination", name: "Venue", path: [] },
+    makeItem({ uid: "p1", path: [] }),
+  ];
+  const original = items[2];
+  const result = computeInvoiceItemPaths(items);
+  assertEquals(original.path, []);
+  assertEquals(result[2].path, ["od-1", "dest-1", "p1"]);
+});
+
+// ── Top-level field sync helpers ────────────────────────────────
+
+function makePair(
+  deliveryUid: string,
+  collectionUid: string,
+  overrides: {
+    delivery?: { instructions?: string | null };
+    collection?: { instructions?: string | null };
+    customer_collecting?: boolean;
+    customer_returning?: boolean;
+  } = {},
+) {
+  return {
+    delivery: { uid: deliveryUid, address: null, instructions: overrides.delivery?.instructions ?? null, contact: null },
+    collection: { uid: collectionUid, address: null, instructions: overrides.collection?.instructions ?? null, contact: null },
+    customer_collecting: overrides.customer_collecting ?? false,
+    customer_returning: overrides.customer_returning ?? false,
+  };
+}
+
+Deno.test("syncOrderDestinationsSelective adds new pairs tagged with uid_order", () => {
+  const prev = [makePair("d1", "c1")];
+  const next = [makePair("d1", "c1"), makePair("d2", "c2")];
+  const invoice: InvoiceDestinationPair[] = [{ uid_order: "o1", ...makePair("d1", "c1") }];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 2);
+  assertEquals(result[1].delivery.uid, "d2");
+  assertEquals(result[1].uid_order, "o1");
+});
+
+Deno.test("syncOrderDestinationsSelective replaces synced pairs with new order data", () => {
+  const prev = [makePair("d1", "c1", { delivery: { instructions: "old" } })];
+  const next = [makePair("d1", "c1", { delivery: { instructions: "new" } })];
+  const invoice: InvoiceDestinationPair[] = [{ uid_order: "o1", ...makePair("d1", "c1", { delivery: { instructions: "old" } }) }];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].delivery.instructions, "new");
+});
+
+Deno.test("syncOrderDestinationsSelective keeps overridden pairs (invoice differs from prev)", () => {
+  const prev = [makePair("d1", "c1", { delivery: { instructions: "orig" } })];
+  const next = [makePair("d1", "c1", { delivery: { instructions: "new" } })];
+  const invoice: InvoiceDestinationPair[] = [{ uid_order: "o1", ...makePair("d1", "c1", { delivery: { instructions: "manual edit" } }) }];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].delivery.instructions, "manual edit");
+});
+
+Deno.test("syncOrderDestinationsSelective drops removed pairs when not overridden", () => {
+  const prev = [makePair("d1", "c1"), makePair("d2", "c2")];
+  const next = [makePair("d1", "c1")];
+  const invoice: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o1", ...makePair("d2", "c2") },
+  ];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].delivery.uid, "d1");
+});
+
+Deno.test("syncOrderDestinationsSelective keeps removed pairs when overridden", () => {
+  const prev = [makePair("d1", "c1"), makePair("d2", "c2", { delivery: { instructions: "orig" } })];
+  const next = [makePair("d1", "c1")];
+  const invoice: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o1", ...makePair("d2", "c2", { delivery: { instructions: "manual edit" } }) },
+  ];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 2);
+  assertEquals(result[1].delivery.instructions, "manual edit");
+});
+
+Deno.test("syncOrderDestinationsSelective leaves out-of-scope (other-order) pairs untouched", () => {
+  const prev = [makePair("d1", "c1")];
+  const next: ReturnType<typeof makePair>[] = [];
+  const invoice: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o2", ...makePair("dX", "cX") },
+  ];
+  const result = syncOrderDestinationsSelective(prev, next, invoice, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].uid_order, "o2");
+  assertEquals(result[0].delivery.uid, "dX");
+});
+
+Deno.test("removeOrderScopedDestinations filters by uid_order", () => {
+  const dests: InvoiceDestinationPair[] = [
+    { uid_order: "o1", ...makePair("d1", "c1") },
+    { uid_order: "o2", ...makePair("d2", "c2") },
+  ];
+  const result = removeOrderScopedDestinations(dests, "o1");
+  assertEquals(result.length, 1);
+  assertEquals(result[0].uid_order, "o2");
+});
+
+Deno.test("syncScalarWithOverride replaces when invoice matches prev", () => {
+  assertEquals(syncScalarWithOverride("foo", "bar", "foo"), "bar");
+  assertEquals(syncScalarWithOverride(null, "new", null), "new");
+  assertEquals(syncScalarWithOverride(undefined, "new", undefined), "new");
+});
+
+Deno.test("syncScalarWithOverride keeps invoice when it differs from prev", () => {
+  assertEquals(syncScalarWithOverride("foo", "bar", "manual"), "manual");
+  assertEquals(syncScalarWithOverride(null, "new", "manual"), "manual");
+});
+
+Deno.test("syncObjectWithOverride respects keys subset", () => {
+  const prev = { uid: "org1", name: "A", tax_profile: "applied" };
+  const next = { uid: "org1", name: "B", tax_profile: "applied" };
+  const invoice = { uid: "org1", name: "A", tax_profile: "exempt" };
+  // Keys-subset match on (uid, name): prev.name === invoice.name → replace.
+  const result = syncObjectWithOverride(prev, next, invoice, ["uid", "name"]);
+  assertEquals(result, next);
+});
+
+Deno.test("syncObjectWithOverride keeps invoice when compared subset diverges", () => {
+  const prev = { uid: "org1", name: "A" };
+  const next = { uid: "org1", name: "B" };
+  const invoice = { uid: "org1", name: "manual" };
+  const result = syncObjectWithOverride(prev, next, invoice, ["uid", "name"]);
+  assertEquals(result, invoice);
+});
+
+// ── validateInvoiceItemPaths ────────────────────────────────────
+
+// Start each test from a baseline normalized through computeInvoiceItemPaths so
+// the test fixture's bare order divider path doesn't mask injected mismatches.
+const cleanInvoiceItems: InvoiceItem[] = computeInvoiceItemPaths(multiOrderInvoiceItems);
+
+Deno.test("validateInvoiceItemPaths returns [] for items just produced by computeInvoiceItemPaths", () => {
+  assertEquals(validateInvoiceItemPaths(cleanInvoiceItems), []);
+});
+
+Deno.test("validateInvoiceItemPaths flags items missing the order divider prefix", () => {
+  // Line item under order-div-1 written without the divider in its path.
+  const items = cleanInvoiceItems.map((it, i) =>
+    i === 2 ? { ...it, path: ["dest-1", "item-1"] } : it
+  );
+  const issues = validateInvoiceItemPaths(items);
+  assertEquals(issues.length, 1);
+  assertEquals(issues[0], {
+    index: 2,
+    uid: "item-1",
+    path: ["dest-1", "item-1"],
+    expected: ["order-div-1", "dest-1", "item-1"],
+  });
+});
+
+Deno.test("validateInvoiceItemPaths flags stale structural uids inside an order scope", () => {
+  // Item carries a leaked structural uid ("dest-2") from a sibling destination
+  // (synthesized inline for this test) it briefly passed through.
+  const staleDest: InvoiceItem = {
+    uid: "dest-2",
+    type: "destination",
+    name: "Other Venue",
+    uid_delivery: "del-2",
+    uid_collection: null,
+    path: ["order-div-1", "dest-2"],
+  };
+  const items: InvoiceItem[] = [
+    cleanInvoiceItems[0], // order-div-1
+    cleanInvoiceItems[1], // dest-1
+    staleDest,
+    { ...cleanInvoiceItems[2], path: ["order-div-1", "dest-1", "dest-2", "item-1"] },
+  ];
+  const issues = validateInvoiceItemPaths(items);
+  assertEquals(issues.length, 1);
+  // After staleDest, the line item's current destination is dest-2 — so the
+  // recomputed path drops both stale dest-1 and the duplicate dest-2 segment.
+  assertEquals(issues[0], {
+    index: 3,
+    uid: "item-1",
+    path: ["order-div-1", "dest-1", "dest-2", "item-1"],
+    expected: ["order-div-1", "dest-2", "item-1"],
+  });
+});
+
+Deno.test("validateInvoiceItemPaths does not mutate input items", () => {
+  const items = cleanInvoiceItems.map((it, i) =>
+    i === 2 ? { ...it, path: ["bogus"] } : it
+  );
+  const before = items[2].path.slice();
+  validateInvoiceItemPaths(items);
+  assertEquals(items[2].path, before);
+});
+
+// ── validateInvoiceItemUniqueness ──────────────────────────────
+
+Deno.test("validateInvoiceItemUniqueness returns [] for clean multi-order invoice", () => {
+  // Same-uid line in two different order divider scopes is allowed.
+  assertEquals(validateInvoiceItemUniqueness(multiOrderInvoiceItems), []);
+});
+
+Deno.test("validateInvoiceItemUniqueness flags duplicates within one order divider's scope", () => {
+  const items: InvoiceItem[] = [
+    orderDivider,
+    {
+      uid: "g1",
+      type: "group",
+      name: "G1",
+      description: "",
+      path: ["order-div-1", "g1"],
+    } as InvoiceItem,
+    makeItem({ uid: "P", path: ["order-div-1", "g1", "P"] }),
+    makeItem({ uid: "P", path: ["order-div-1", "g1", "P"] }),
+  ];
+  const issues = validateInvoiceItemUniqueness(items);
+  assertEquals(issues.length, 1);
+  assertEquals(issues[0].uid, "P");
+  assertEquals(issues[0].parentUid, "g1");
+});
+
+Deno.test("validateInvoiceItemUniqueness allows same product in two different order scopes", () => {
+  // Same product line inside order divider 1 and order divider 2 — not a violation.
+  const items: InvoiceItem[] = [
+    orderDivider,
+    makeItem({ uid: "P", path: ["order-div-1", "P"] }),
+    orderDivider2,
+    makeItem({ uid: "P", path: ["order-div-2", "P"] }),
+  ];
+  assertEquals(validateInvoiceItemUniqueness(items), []);
+});

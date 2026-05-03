@@ -1,6 +1,61 @@
-# utilities-next
+# @cfs/utilities
 
-Shared utilities for the CFS platform, published to JSR.
+Shared date and order utility functions for CFS applications, published to
+[JSR](https://jsr.io/@cfs/utilities).
+
+See [API.md](./API.md) for the full symbol reference (generated from source),
+or browse on [JSR](https://jsr.io/@cfs/utilities/doc/all_symbols).
+
+## Usage
+
+### Dates
+
+```ts
+import {
+  formatChargeDays,
+  countCfsBusinessDays,
+  getDefaultStartDate,
+} from "@cfs/utilities/dates";
+
+// Format chargeable days for display
+const result = formatChargeDays(10);
+console.log(result.periodLabel); // "2 weeks"
+
+// Count business days between two dates (excluding weekends and holidays)
+const start = new Date("2025-01-06");
+const end = new Date("2025-01-10");
+const days = countCfsBusinessDays(start, end, ["2025-01-20"]);
+console.log(days.days); // 5
+
+// Get the next available rental start date
+const startDate = getDefaultStartDate(["2025-12-25"]);
+```
+
+### Orders
+
+```ts
+import { calculateOrderTotals, consolidateItems } from "@cfs/utilities/orders";
+
+// Calculate pricing totals for an order
+const items = [
+  {
+    type: "rental",
+    quantity: 2,
+    price: {
+      base: 50,
+      formula: "five_day_week",
+      chargeable_days: 5,
+      discount: null,
+      taxes: [{ uid: "tax-1", name: "Sales Tax", rate: 10, type: "percent" }],
+      subtotal: 100,
+      subtotal_discounted: 100,
+    },
+  },
+];
+const taxes = [{ uid: "tax-1", name: "Sales Tax", rate: 10, type: "percent" }];
+const totals = calculateOrderTotals(items, taxes);
+console.log(totals.total); // 110
+```
 
 ## Commit Guidelines (Semantic Release)
 

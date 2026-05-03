@@ -25,10 +25,13 @@ jobs:
         run: deno lint
 
       - name: Type check
-        run: deno check src/dates.ts src/orders.ts
+        run: deno check src/
 
       - name: Test
         run: deno test tests/
+
+      - name: API docs up to date
+        run: deno task docs:check
 
   release:
     needs: ci

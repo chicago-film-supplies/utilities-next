@@ -1,12 +1,30 @@
 /**
- * @cfs/utilities/dates
- *
  * Pure date helper functions for CFS applications.
  * All functions accept holidays as a parameter to enable client-side calculations.
+ *
+ * ```ts
+ * import { formatChargeDays, countCfsBusinessDays } from "@cfs/utilities/dates";
+ *
+ * const result = formatChargeDays(10);
+ * console.log(result.periodLabel); // "2 weeks"
+ *
+ * const start = new Date("2025-01-06");
+ * const end = new Date("2025-01-10");
+ * const days = countCfsBusinessDays(start, end, []);
+ * console.log(days.days); // 5
+ * ```
+ *
+ * Published in lockstep with `@cfs/schemas` — version bumps track the
+ * schemas package so consumers pin one pair of beta versions without
+ * resolving dual shapes (Card.recurrence_overrides, Recurrence collection
+ * rollout, etc.).
+ *
+ * @module
  */
 
 import {
   addDays,
+  format,
   getHours,
   isAfter,
   isBefore,
@@ -15,12 +33,61 @@ import {
   isWeekend,
   parseISO,
   set,
+  startOfDay,
 } from "date-fns";
 import { TZDate, tz } from "@date-fns/tz";
 
+/**
+ * Canonicalize any valid ISO datetime string to Chicago offset form,
+ * preserving the instant. Idempotent.
+ *
+ * ```ts
+ * toChicagoInstant("2025-12-22T15:15:00.000Z");      // "2025-12-22T09:15:00.000-06:00"
+ * toChicagoInstant("2025-12-22T09:15:00.000-06:00"); // "2025-12-22T09:15:00.000-06:00" (no-op)
+ * toChicagoInstant("2025-12-23T00:15:00.000+09:00"); // "2025-12-22T09:15:00.000-06:00" (same instant)
+ * ```
+ */
+export function toChicagoInstant(input: string): string {
+  return parseISO(input, { in: tz("America/Chicago") }).toISOString();
+}
+
+/**
+ * Canonicalize to Chicago local midnight for the calendar date containing
+ * the input instant. Use for fields that semantically represent a date
+ * (invoice.date, invoice.due_date, payments[].date). Idempotent.
+ *
+ * ```ts
+ * toChicagoStartOfDay("2025-12-22T15:15:00.000Z"); // "2025-12-22T00:00:00.000-06:00"
+ * toChicagoStartOfDay("2025-12-22T03:00:00.000Z"); // "2025-12-21T00:00:00.000-06:00" (Chicago day = Dec 21)
+ * toChicagoStartOfDay("2025-07-04");               // "2025-07-04T00:00:00.000-05:00" (CDT)
+ * ```
+ */
+export function toChicagoStartOfDay(input: string): string {
+  return startOfDay(parseISO(input, { in: tz("America/Chicago") }))
+    .toISOString();
+}
+
+/**
+ * Format an ISO datetime as the Chicago calendar date in `YYYY-MM-DD` form.
+ * The inverse of {@link toChicagoStartOfDay} — use to populate
+ * `<input type="date">` from a canonical Chicago-offset value.
+ *
+ * ```ts
+ * toChicagoYmd("2025-02-14T00:00:00.000-06:00"); // "2025-02-14"
+ * toChicagoYmd("2025-02-14T03:00:00.000Z");      // "2025-02-13" (Chicago day)
+ * toChicagoYmd("2025-07-04T00:00:00.000-05:00"); // "2025-07-04" (CDT)
+ * ```
+ */
+export function toChicagoYmd(input: string): string {
+  return format(parseISO(input), "yyyy-MM-dd", { in: tz("America/Chicago") });
+}
+
+/** Display values returned by {@link formatChargeDays}. */
+export type ChargeDaysLabel = "day" | "days" | "week" | "weeks";
+
 export interface FormatChargeDaysResult {
   value: number;
-  label: string;
+  label: ChargeDaysLabel;
   periodLabel: string;
   isWeeks: boolean;
   step: number;
@@ -28,10 +95,12 @@ export interface FormatChargeDaysResult {
 
 /**
  * Format a chargeable days number into display values for a duration input.
+ * @param days - A positive number of chargeable days.
+ * @param unit - Display unit: `"day"`, `"days"`, `"week"`, or `"weeks"`. When omitted, weeks are used if `days >= 5`.
  */
 export function formatChargeDays(
   days: number,
-  unit?: string,
+  unit?: "day" | "days" | "week" | "weeks",
 ): FormatChargeDaysResult {
   if (typeof days !== "number" || !isFinite(days) || days <= 0) {
     throw new Error("days must be a positive number; days: " + days);
@@ -52,7 +121,7 @@ export function formatChargeDays(
   const value = isWeeks ? days / 5 : days;
   const step = isWeeks ? 0.2 : 1;
 
-  let label: string;
+  let label: ChargeDaysLabel;
   if (isWeeks) {
     label = value === 1 ? "week" : "weeks";
   } else {
@@ -177,12 +246,13 @@ export function getEndDateByChargePeriod(
   return endDate;
 }
 
+/** Result of a business-day count between two dates. */
 export interface BusinessDaysResult {
   calendarDays: number;
   calendarWeeks: number;
   days: number;
   weeks: number;
-  label: string;
+  label: ChargeDaysLabel;
   periodLabel: string;
 }
 
@@ -220,8 +290,8 @@ export function countCfsBusinessDays(
   const weeks = days / 5;
   const calendarWeeks = calendarDays / 5;
 
-  let label = "";
-  let periodLabel = "";
+  let label: ChargeDaysLabel = "days";
+  let periodLabel = "0 days";
   if (days > 0) {
     ({ label, periodLabel } = formatChargeDays(days));
   }
@@ -229,13 +299,15 @@ export function countCfsBusinessDays(
   return { calendarDays, calendarWeeks, days, weeks, label, periodLabel };
 }
 
+/** Date strings required by {@link getDuration}. Nullable to mirror OrderDocDatesType — runtime guards throw when either boundary is null. */
 export interface DurationDates {
-  delivery_start: string;
-  collection_start: string;
-  charge_start?: string;
-  charge_end?: string;
+  delivery_start: string | null;
+  collection_start: string | null;
+  charge_start?: string | null;
+  charge_end?: string | null;
 }
 
+/** Active and chargeable duration breakdown returned by {@link getDuration}. */
 export interface DurationResult {
   activeDays: number;
   activeWeeks: number;
