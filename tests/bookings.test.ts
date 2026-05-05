@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
   applyBookingBreakdownDelta,
+  calculateBookingBreakdown,
   emptyBookingsBreakdown,
   isOrderBookingsBreakdownClosed,
   mergeBookingBreakdown,
@@ -84,4 +85,78 @@ Deno.test("isOrderBookingsBreakdownClosed: false when any open key > 0", () => {
 
 Deno.test("isOrderBookingsBreakdownClosed: false on empty roll-up (no bookings)", () => {
   assertEquals(isOrderBookingsBreakdownClosed(emptyBookingsBreakdown()), false);
+});
+
+Deno.test("calculateBookingBreakdown: draft/canceled → all zeros", () => {
+  const prev = sample({ reserved: 5, prepped: 5 });
+  assertEquals(calculateBookingBreakdown("draft", "rental", 10, prev), emptyBookingsBreakdown());
+  assertEquals(calculateBookingBreakdown("canceled", "rental", 10, prev), emptyBookingsBreakdown());
+});
+
+Deno.test("calculateBookingBreakdown: quoted from fresh", () => {
+  assertEquals(
+    calculateBookingBreakdown("quoted", "rental", 10),
+    sample({ quoted: 10 }),
+  );
+});
+
+Deno.test("calculateBookingBreakdown: reserved from fresh", () => {
+  assertEquals(
+    calculateBookingBreakdown("reserved", "rental", 10),
+    sample({ reserved: 10 }),
+  );
+});
+
+Deno.test("calculateBookingBreakdown: active behaves like reserved", () => {
+  assertEquals(
+    calculateBookingBreakdown("active", "rental", 10),
+    sample({ reserved: 10 }),
+  );
+});
+
+Deno.test("calculateBookingBreakdown: quoted → reserved drops the previous quoted bucket", () => {
+  // The bug fix — previously quoted=10 would persist into the reserved-state breakdown.
+  const prev = sample({ quoted: 10 });
+  const next = calculateBookingBreakdown("reserved", "rental", 10, prev);
+  assertEquals(next, sample({ reserved: 10 }));
+  assertEquals(sumBookingBreakdown(next), 10);
+});
+
+Deno.test("calculateBookingBreakdown: reserved → quoted drops the previous reserved bucket", () => {
+  const prev = sample({ reserved: 10 });
+  const next = calculateBookingBreakdown("quoted", "rental", 10, prev);
+  assertEquals(next, sample({ quoted: 10 }));
+});
+
+Deno.test("calculateBookingBreakdown: reserved preserves in-flight progress", () => {
+  const prev = sample({ reserved: 0, prepped: 3, out: 2, returned: 1, lost: 1, damaged: 1 });
+  const next = calculateBookingBreakdown("reserved", "rental", 10, prev);
+  assertEquals(next, {
+    quoted: 0, reserved: 2, prepped: 3, out: 2, returned: 1, lost: 1, damaged: 1,
+  });
+  assertEquals(sumBookingBreakdown(next), 10);
+});
+
+Deno.test("calculateBookingBreakdown: complete rental → returned + lost + damaged sum to quantity", () => {
+  const prev = sample({ out: 8, lost: 1, damaged: 1 });
+  const next = calculateBookingBreakdown("complete", "rental", 10, prev);
+  assertEquals(next, sample({ returned: 8, lost: 1, damaged: 1 }));
+  assertEquals(sumBookingBreakdown(next), 10);
+});
+
+Deno.test("calculateBookingBreakdown: complete sale → all qty in out", () => {
+  const prev = sample({ reserved: 5 });
+  const next = calculateBookingBreakdown("complete", "sale", 5, prev);
+  assertEquals(next, sample({ out: 5 }));
+});
+
+Deno.test("calculateBookingBreakdown: repairs corrupt double-bucket from buggy webhook", () => {
+  // Real-world corrupt state: quantity=30 but breakdown sums to 60 because
+  // a quoted→reserved transition left both buckets populated.
+  const corrupt = sample({ quoted: 30, reserved: 30 });
+  assertEquals(sumBookingBreakdown(corrupt), 60);
+
+  const repaired = calculateBookingBreakdown("reserved", "rental", 30, corrupt);
+  assertEquals(repaired, sample({ reserved: 30 }));
+  assertEquals(sumBookingBreakdown(repaired), 30);
 });
