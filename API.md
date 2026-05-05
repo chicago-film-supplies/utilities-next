@@ -51,6 +51,27 @@ Given a booking's previous and next breakdown, mutate the order roll-up by
 booking) and client-side (where the manager can apply the same delta
 locally for instant feedback).
 
+### `calculateBookingBreakdown(status: string, type: string, quantity: number, existingBreakdown?: indexedAccess): indexedAccess`
+
+Project a booking's breakdown for a given order status, item type, and
+total quantity. Pure sync — no I/O.
+
+The new bucket (`quoted` for status `quoted`, `reserved` for `reserved`/
+`active`, `returned`/`out` for `complete`) is computed as
+`quantity - (carried-over progress)` so the resulting breakdown always
+sums to `quantity`. The carry-over set is `prepped + out + returned + lost
++ damaged` — the previous `quoted` and `reserved` values are intentionally
+dropped, which is what fixes the "two open buckets after a status flip"
+data corruption that surfaced in opportunity webhook ingestion.
+
+Status rules:
+  draft / canceled  → all zeros (cleared on cancel/draft)
+  quoted            → quoted = quantity − carry; preserves prepped/out/terminals
+  reserved / active → reserved = quantity − carry; preserves prepped/out/terminals
+  complete + rental → returned = quantity − (lost + damaged); zero everything else
+  complete + sale   → out = quantity; zero everything else
+  anything else     → all zeros
+
 ### `emptyBookingsBreakdown(): indexedAccess`
 
 The empty breakdown shape — all seven keys at zero.

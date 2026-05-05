@@ -34,6 +34,14 @@
         },
         {
           "kind": "function",
+          "name": "calculateBookingBreakdown",
+          "signature": "calculateBookingBreakdown(status: string, type: string, quantity: number, existingBreakdown?: indexedAccess): indexedAccess",
+          "doc": "Project a booking's breakdown for a given order status, item type, and\ntotal quantity. Pure sync — no I/O.\n\nThe new bucket (`quoted` for status `quoted`, `reserved` for `reserved`/\n`active`, `returned`/`out` for `complete`) is computed as\n`quantity - (carried-over progress)` so the resulting breakdown always\nsums to `quantity`. The carry-over set is `prepped + out + returned + lost\n+ damaged` — the previous `quoted` and `reserved` values are intentionally\ndropped, which is what fixes the \"two open buckets after a status flip\"\ndata corruption that surfaced in opportunity webhook ingestion.\n\nStatus rules:\n  draft / canceled  → all zeros (cleared on cancel/draft)\n  quoted            → quoted = quantity − carry; preserves prepped/out/terminals\n  reserved / active → reserved = quantity − carry; preserves prepped/out/terminals\n  complete + rental → returned = quantity − (lost + damaged); zero everything else\n  complete + sale   → out = quantity; zero everything else\n  anything else     → all zeros",
+          "paramTags": [],
+          "returnsTag": null
+        },
+        {
+          "kind": "function",
           "name": "emptyBookingsBreakdown",
           "signature": "emptyBookingsBreakdown(): indexedAccess",
           "doc": "The empty breakdown shape — all seven keys at zero.\n\nUse as the seed for new orders and as the target shape for fresh bookings.\n\n```ts\nconst order = { ...orderInput, bookings_breakdown: emptyBookingsBreakdown() };\n```",
