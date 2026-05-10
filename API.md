@@ -121,6 +121,78 @@ seed `order.bookings_breakdown` at create/update time and to recompute it
 client-side from cached bookings when the order doc isn't authoritative
 yet.
 
+## `@cfs/utilities/cards`
+
+Pure helpers over event-card lifecycle. Shared by api-cloudrun (writers
+inside the booking-update transaction) and the manager (optimistic
+client-side projections in `applyBookingActions`) so both sides agree on
+exactly what `card.status` becomes after a booking write.
+
+```ts
+import { computeCardStatusFromBookings } from "@cfs/utilities/cards";
+```
+
+### `CardSiblingBooking`
+
+Subset of `Booking` the formula reads. Keeps the helper dependency-light.
+
+```ts
+type CardSiblingBooking = Pick<Booking, "type" | "quantity" | "breakdown">;
+```
+
+### `CardSide`
+
+Which side of the order's lifecycle a card represents:
+- `"start"` — delivery event (items leave the warehouse for a destination).
+  Backed by sibling bookings filtered by `uid_destination_delivery`.
+- `"end"`   — collection event (items return from a destination).
+  Backed by sibling bookings filtered by `uid_destination_collection`.
+
+```ts
+type CardSide = "start" | "end";
+```
+
+### `computeCardStatusFromBookings(side: CardSide, siblings: CardSiblingBooking[], current: CardStatus): CardStatus`
+
+Recompute an event card's `status` from its sibling bookings on the
+destination it belongs to. Pure function — no Firestore reads.
+
+Preserves manual overrides:
+- `"blocked"` — manually set on the card; sticks until either the parent
+  order transitions to canceled (handled in update-order) or a future
+  "Clear block" affordance writes a new auto value through the same path.
+- `"canceled"` — terminal; sourced from order.status only.
+
+Otherwise, applies per-side roll-up rules:
+
+**Start card (delivery)** — siblings filtered to `uid_destination_delivery`:
+  - `pre_delivery = Σ (quoted + reserved + prepped)` — still in the warehouse.
+  - `out          = Σ breakdown.out` — delivery in flight.
+  - if `pre_delivery === 0`            → `complete` (everything has at least left)
+  - else if `out > 0`                  → `active`   (delivery in progress)
+  - else                                → `planned`  (nothing has moved yet)
+
+**End card (collection)** — siblings filtered to `uid_destination_collection`:
+  Sale-type bookings are excluded — sales have no collection event, so the
+  end card stays planned↔complete based on rental siblings only.
+  - `terminal  = Σ (returned + lost + damaged)`
+  - `total     = Σ booking.quantity`
+  - `still_out = Σ breakdown.out`
+  - if `terminal === total`              → `complete` (everything collected/written-off)
+  - else if `terminal > 0 || still_out > 0` → `active`   (collection in progress)
+  - else                                  → `planned`  (nothing has come back yet)
+
+If the end-side roll-up has no rental siblings (e.g. a sale-only
+destination), the card resolves to `complete` — there is nothing to collect.
+
+**Parameters**
+
+- `side` — Which card side this is — drives which key set we sum and
+which sibling set the caller is expected to have prepared.
+- `siblings` — Bookings filtered to the relevant destination side.
+- `current` — The card's current status — preserved if `blocked` or
+`canceled` so manual overrides aren't clobbered.
+
 ## `@cfs/utilities/contact-name`
 
 Contact name helpers — re-exports the canonical `deriveName` from

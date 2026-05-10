@@ -2,18 +2,18 @@
   "version": "5",
   "specifiers": {
     "jsr:@cfs/schemas@*": "3.0.0",
-    "jsr:@cfs/schemas@9.1.0": "9.1.0",
+    "jsr:@cfs/schemas@10.0.0-beta.1": "10.0.0-beta.1",
     "jsr:@std/assert@^1.0.19": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "npm:@date-fns/tz@^1.4.1": "1.4.1",
     "npm:currency.js@^2.0.4": "2.0.4",
     "npm:date-fns@^4.1.0": "4.1.0",
     "npm:firebase-admin@*": "13.8.0",
-    "npm:zod@^4.3.6": "4.3.6"
+    "npm:zod@^4.3.6": "4.4.3"
   },
   "jsr": {
-    "@cfs/schemas@9.1.0": {
-      "integrity": "33f261319ace161d97fd4195aba8b13f7b7250eea87280effd63a6fec061ddc7",
+    "@cfs/schemas@10.0.0-beta.1": {
+      "integrity": "9f55f62d5cecb129a4c03435d8414e8689882bfb7ff240c470ba53b9e9815a26",
       "dependencies": [
         "npm:@date-fns/tz",
         "npm:date-fns",
@@ -916,10 +916,12 @@
     },
     "uuid@8.3.2": {
       "integrity": "sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==",
+      "deprecated": true,
       "bin": true
     },
     "uuid@9.0.1": {
       "integrity": "sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==",
+      "deprecated": true,
       "bin": true
     },
     "web-streams-polyfill@3.3.3": {
@@ -981,13 +983,13 @@
     "yocto-queue@0.1.0": {
       "integrity": "sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q=="
     },
-    "zod@4.3.6": {
-      "integrity": "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="
+    "zod@4.4.3": {
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="
     }
   },
   "workspace": {
     "dependencies": [
-      "jsr:@cfs/schemas@9.1.0",
+      "jsr:@cfs/schemas@10.0.0-beta.1",
       "jsr:@std/assert@^1.0.19",
       "npm:@date-fns/tz@^1.4.1",
       "npm:currency.js@^2.0.4",

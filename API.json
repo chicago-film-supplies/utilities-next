@@ -83,6 +83,45 @@
       ]
     },
     {
+      "entrypoint": "@cfs/utilities/cards",
+      "moduleDoc": "Pure helpers over event-card lifecycle. Shared by api-cloudrun (writers\ninside the booking-update transaction) and the manager (optimistic\nclient-side projections in `applyBookingActions`) so both sides agree on\nexactly what `card.status` becomes after a booking write.\n\n```ts\nimport { computeCardStatusFromBookings } from \"@cfs/utilities/cards\";\n```",
+      "symbols": [
+        {
+          "kind": "typeAlias",
+          "name": "CardSiblingBooking",
+          "declaration": "type CardSiblingBooking = Pick<Booking, \"type\" | \"quantity\" | \"breakdown\">;",
+          "doc": "Subset of `Booking` the formula reads. Keeps the helper dependency-light."
+        },
+        {
+          "kind": "typeAlias",
+          "name": "CardSide",
+          "declaration": "type CardSide = \"start\" | \"end\";",
+          "doc": "Which side of the order's lifecycle a card represents:\n- `\"start\"` — delivery event (items leave the warehouse for a destination).\n  Backed by sibling bookings filtered by `uid_destination_delivery`.\n- `\"end\"`   — collection event (items return from a destination).\n  Backed by sibling bookings filtered by `uid_destination_collection`."
+        },
+        {
+          "kind": "function",
+          "name": "computeCardStatusFromBookings",
+          "signature": "computeCardStatusFromBookings(side: CardSide, siblings: CardSiblingBooking[], current: CardStatus): CardStatus",
+          "doc": "Recompute an event card's `status` from its sibling bookings on the\ndestination it belongs to. Pure function — no Firestore reads.\n\nPreserves manual overrides:\n- `\"blocked\"` — manually set on the card; sticks until either the parent\n  order transitions to canceled (handled in update-order) or a future\n  \"Clear block\" affordance writes a new auto value through the same path.\n- `\"canceled\"` — terminal; sourced from order.status only.\n\nOtherwise, applies per-side roll-up rules:\n\n**Start card (delivery)** — siblings filtered to `uid_destination_delivery`:\n  - `pre_delivery = Σ (quoted + reserved + prepped)` — still in the warehouse.\n  - `out          = Σ breakdown.out` — delivery in flight.\n  - if `pre_delivery === 0`            → `complete` (everything has at least left)\n  - else if `out > 0`                  → `active`   (delivery in progress)\n  - else                                → `planned`  (nothing has moved yet)\n\n**End card (collection)** — siblings filtered to `uid_destination_collection`:\n  Sale-type bookings are excluded — sales have no collection event, so the\n  end card stays planned↔complete based on rental siblings only.\n  - `terminal  = Σ (returned + lost + damaged)`\n  - `total     = Σ booking.quantity`\n  - `still_out = Σ breakdown.out`\n  - if `terminal === total`              → `complete` (everything collected/written-off)\n  - else if `terminal > 0 || still_out > 0` → `active`   (collection in progress)\n  - else                                  → `planned`  (nothing has come back yet)\n\nIf the end-side roll-up has no rental siblings (e.g. a sale-only\ndestination), the card resolves to `complete` — there is nothing to collect.",
+          "paramTags": [
+            {
+              "name": "side",
+              "doc": "Which card side this is — drives which key set we sum and\nwhich sibling set the caller is expected to have prepared."
+            },
+            {
+              "name": "siblings",
+              "doc": "Bookings filtered to the relevant destination side."
+            },
+            {
+              "name": "current",
+              "doc": "The card's current status — preserved if `blocked` or\n`canceled` so manual overrides aren't clobbered."
+            }
+          ],
+          "returnsTag": null
+        }
+      ]
+    },
+    {
       "entrypoint": "@cfs/utilities/contact-name",
       "moduleDoc": "Contact name helpers — re-exports the canonical `deriveName` from\n`@cfs/schemas` so manager and other utilities consumers can import it\nfrom a single, stable runtime location.\n\n```ts\nimport { deriveName } from \"@cfs/utilities/contact-name\";\n\nderiveName({ first_name: \"Alex\", last_name: \"Hughes\" }); // \"Alex Hughes\"\nderiveName({ first_name: \"Alex\", pronunciation: \"al-ix\" }); // \"Alex (al-ix)\"\n```\n\nStored documents (Contact, User, Invite, embedded contact refs) carry a\ndenormalized `name` field populated by the server via this helper. Use\n`entity.name` directly when the doc has been read back; only call\n`deriveName` for in-flight objects whose `name` hasn't been server-derived\nyet (e.g. manager-side optimistic state before the API responds).",
       "symbols": [
