@@ -99,7 +99,7 @@ const lineItem2: InvoiceItem = {
     total: 300,
   },
   path: ["order-div-1", "dest-1", "item-2"],
-  xero_id: "xero-123",
+  xero_id: "00000000-0000-4000-8000-000000000123",
 } as InvoiceItem;
 
 const orderDivider2: InvoiceItem = {
@@ -293,14 +293,14 @@ Deno.test("carryForwardOverrides preserves coa_revenue and xero_id from existing
     { uid: "item-new", type: "sale", name: "New Item", quantity: 1, path: [] },
   ];
   const existing: InvoiceItem[] = [
-    { uid: "item-1", type: "rental", name: "Light", coa_revenue: 4100, xero_id: "xero-1", path: [] },
+    { uid: "item-1", type: "rental", name: "Light", coa_revenue: 4100, xero_id: "00000000-0000-4000-8000-000000000001", path: [] },
     { uid: "item-removed", type: "sale", name: "Gone", coa_revenue: 4200, path: [] },
   ];
   const result = carryForwardOverrides(rebuilt, existing);
   assertEquals(result[0].name, "Light Updated"); // rebuilt field
   assertEquals(result[0].quantity, 3); // rebuilt field
   assertEquals(result[0].coa_revenue, 4100); // carried forward
-  assertEquals(result[0].xero_id, "xero-1"); // carried forward
+  assertEquals(result[0].xero_id, "00000000-0000-4000-8000-000000000001"); // carried forward
   assertEquals(result[1].coa_revenue, undefined); // new item, no override
 });
 
@@ -436,7 +436,7 @@ Deno.test("syncOrderToInvoiceSelective projects synced items and carries forward
     ...prevItem,
     path: ["order-div-1", "dest-1", "item-1"],
     coa_revenue: 4100,
-    xero_id: "xero-1",
+    xero_id: "00000000-0000-4000-8000-000000000001",
   } as InvoiceItem;
   const newItem: LineItem = {
     ...prevItem,
@@ -457,7 +457,7 @@ Deno.test("syncOrderToInvoiceSelective projects synced items and carries forward
   assertEquals(out.quantity, 3);
   // Carried forward from the overridden invoice item
   assertEquals((out as InvoiceItem).coa_revenue, 4100);
-  assertEquals((out as InvoiceItem).xero_id, "xero-1");
+  assertEquals((out as InvoiceItem).xero_id, "00000000-0000-4000-8000-000000000001");
   // Projected — strict schema passes
   const parsed = InvoiceDocLineItemSchema.safeParse(out);
   assertEquals(parsed.success, true, JSON.stringify(parsed.success ? {} : parsed.error.issues, null, 2));
